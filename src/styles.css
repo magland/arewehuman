@@ -98,7 +98,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .main { flex: 1; min-height: 0; overflow: auto; }
 
 /* editor */
-.editor-page { display: flex; flex-direction: column; height: 100%; }
+.editor-page { display: flex; flex-direction: column; height: 100%; position: relative; }
+.drop-overlay { position: absolute; inset: 8px; z-index: 30; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; border: 2px dashed var(--accent); border-radius: 12px; background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--text); font-size: 16px; pointer-events: none; }
 .toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
 .title-input { flex: 1; min-width: 160px; font: 600 18px var(--serif); color: var(--text); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 4px 8px; }
 .title-input:hover, .title-input:focus { border-color: var(--border); outline: none; }

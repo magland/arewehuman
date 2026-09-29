@@ -44,6 +44,7 @@ export function EditorPage() {
   const [menu, setMenu] = useState<null | "docs" | "export">(null);
   const [showPreview, setShowPreview] = useState(() => pref("preview", true));
   const [showSources, setShowSources] = useState(() => pref("sources", true));
+  const [dragging, setDragging] = useState(false);
   const showSourcesRef = useRef(showSources);
 
   const save = useCallback(async () => {
@@ -174,8 +175,33 @@ export function EditorPage() {
   const total = text.length;
   const pct = (n: number) => (total ? Math.round((100 * n) / total) : 0);
 
+  // Files dragged onto the page are imported. This runs in the capture phase so
+  // that CodeMirror never sees the drop; otherwise it would insert the file's
+  // contents into the current document as pasted text.
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
+  const dragProps = {
+    onDragOverCapture: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
+      setDragging(true);
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+    },
+    onDropCapture: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDragging(false);
+      void onFiles(e.dataTransfer.files);
+    },
+  };
+
   return (
-    <div className="editor-page" onClick={() => menu && setMenu(null)}>
+    <div className="editor-page" onClick={() => menu && setMenu(null)} {...dragProps}>
+      {dragging && <div className="drop-overlay">Drop a .prov.json (with or without its .md) or a .md file to import it</div>}
       <div className="toolbar">
         <input
           className="title-input"
@@ -196,6 +222,9 @@ export function EditorPage() {
             }}
           >
             New
+          </button>
+          <button onClick={() => fileInput.current?.click()} title="Open a .prov.json to keep editing it with its history, or a .md file as imported text">
+            Import
           </button>
           <div className="menu-wrap" onClick={(e) => e.stopPropagation()}>
             <button onClick={() => setMenu(menu === "docs" ? null : "docs")} aria-haspopup="menu">
@@ -233,10 +262,6 @@ export function EditorPage() {
                     </button>
                   </div>
                 ))}
-                <div className="menu-sep" />
-                <button className="menu-item" onClick={() => (setMenu(null), fileInput.current?.click())}>
-                  Open file (.prov.json or .md)…
-                </button>
               </div>
             )}
           </div>
