@@ -49,6 +49,7 @@ export function EditorPage() {
   const save = useCallback(async () => {
     const r = rec.current, v = view.current, id = docId.current;
     if (!r || !v || !id) return;
+    if (v.state.doc.length === 0 && r.events.length <= 1 && titleRef.current === "Untitled") return; // untouched blank document
     const doc = await r.toDoc(v.state.doc.toString(), titleRef.current);
     const err = saveDoc(id, doc);
     setSaveErr(err);
