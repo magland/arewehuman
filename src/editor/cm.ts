@@ -1,4 +1,4 @@
-import { Compartment, EditorState, Prec, RangeSetBuilder } from "@codemirror/state";
+import { Compartment, EditorState, Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import {
   Decoration,
   drawSelection,
@@ -117,7 +117,14 @@ const highlightStyle = HighlightStyle.define([
 
 export const highlightCompartment = new Compartment();
 
-export function createEditor(parent: HTMLElement, text: string, rec: Recorder, onChange: () => void, showSources: boolean) {
+export function createEditor(
+  parent: HTMLElement,
+  text: string,
+  rec: Recorder,
+  onChange: () => void,
+  showSources: boolean,
+  extra: Extension = [],
+) {
   const state = EditorState.create({
     doc: text,
     extensions: [
@@ -136,6 +143,7 @@ export function createEditor(parent: HTMLElement, text: string, rec: Recorder, o
         "aria-label": "Document",
       }),
       highlightCompartment.of(showSources ? sourceHighlight(rec) : []),
+      extra,
     ],
   });
   return new EditorView({ state, parent });

@@ -38,6 +38,10 @@ Keystroke timing is also somewhat identifying, since typing rhythm can be used t
 
 Future work will add server-signed timestamps on the hash chain, which would show that a history grew in real time rather than being produced all at once, together with per-character salted commitments so that the signed log commits to each surviving character at the moment it was typed (see [SPEC.md](SPEC.md)).
 
+## VS Code extension
+
+A prototype extension in [`vscode/`](vscode/) records Markdown files edited in VS Code, using the same recorder and file format, and shows replays of `.prov.json` files. See [vscode/README.md](vscode/README.md).
+
 ## Development
 
 ```bash

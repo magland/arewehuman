@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { ProvDoc } from "../prov/format";
 import { loadDoc } from "../storage";
 import { fmtClock, parseProvDoc } from "../util";
@@ -92,16 +92,32 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
     );
 
   return (
-    <div className="viewer" {...dropProps}>
+    <div {...dropProps}>
+      <ViewerBody
+        a={a}
+        err={err}
+        replayKey={loads}
+        headerAction={
+          <label className="button">
+            Open another…
+            <input type="file" accept=".json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
+          </label>
+        }
+      />
+    </div>
+  );
+}
+
+// The checks and replay for a loaded document; also used by the VS Code extension.
+export function ViewerBody({ a, err, replayKey, headerAction }: { a: Analysis; err?: string | null; replayKey?: number; headerAction?: ReactNode }) {
+  return (
+    <div className="viewer">
       <header className="viewer-head">
         <div>
           <h1>{a.doc.title || "Untitled"}</h1>
           <div className="muted small">Started {fmtClock(a.doc.t0)}</div>
         </div>
-        <label className="button">
-          Open another…
-          <input type="file" accept=".json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
-        </label>
+        {headerAction}
       </header>
       <ul className="checks small">
         {a.checks.map((c, i) => (
@@ -112,7 +128,7 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
         ))}
       </ul>
       {err && <p className="error">{err}</p>}
-      {a.tl && <Replay key={loads} a={a} />}
+      {a.tl && <Replay key={replayKey} a={a} />}
     </div>
   );
 }

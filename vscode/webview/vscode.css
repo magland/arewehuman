@@ -1,0 +1,21 @@
+/* Blend the app's neutral colors into the VS Code theme. The selector outranks
+   the theme blocks in styles.css; the source colors (--s-*) are kept. */
+html:root[data-theme] {
+  --bg: var(--vscode-editor-background);
+  --surface: var(--vscode-editor-background);
+  --surface-2: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --text: var(--vscode-editor-foreground);
+  --muted: var(--vscode-descriptionForeground);
+  --border: var(--vscode-editorWidget-border, var(--vscode-panel-border, #8884));
+  --accent: var(--vscode-button-background);
+  --accent-text: var(--vscode-button-foreground);
+  --link: var(--vscode-textLink-foreground);
+  --error: var(--vscode-errorForeground);
+}
+body { padding: 0; font-family: var(--vscode-font-family, var(--sans)); font-size: var(--vscode-font-size, 13px); }
+.awh-vs { display: flex; flex-direction: column; height: 100vh; }
+.awh-vs .editor-host { flex: 1; min-height: 0; }
+.awh-vs .statusbar { font-size: 12px; }
+.awh-vs .banner { padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface-2); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.awh-vs .banner .spacer { flex: 1; }
+.rec-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--error); }
