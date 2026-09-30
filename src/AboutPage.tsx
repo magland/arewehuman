@@ -22,9 +22,9 @@ export function AboutPage() {
       <h2>Files</h2>
       <p>
         Exporting gives two files: <code>name.md</code>, the document itself, and <code>name.prov.json</code>, which contains the same text
-        plus the full event log. The provenance file alone is enough to verify and replay the document. The <a href="#/view">Verify</a> page
-        replays the log, checks that it reproduces the text exactly, checks the hash chain, and shows a replay, a map of which parts were typed,
-        and typing statistics.
+        plus the full event log. The provenance file alone is enough to verify and replay the document. The <a href="#/view">Replay</a> page
+        replays the log, checks that it reproduces the text exactly, checks the hash chain, and plays back the writing of the document at a
+        choice of speeds.
       </p>
       <h2>What this does and does not show</h2>
       <p>

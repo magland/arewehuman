@@ -25,6 +25,19 @@ function setPref(k: string, v: boolean) {
   }
 }
 
+// The preview is shown only when the window is wide enough for two panes.
+const WIDE = "(min-width: 1000px)";
+function useWide() {
+  const [wide, setWide] = useState(() => matchMedia(WIDE).matches);
+  useEffect(() => {
+    const mq = matchMedia(WIDE);
+    const on = () => setWide(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
 export function EditorPage() {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -45,6 +58,8 @@ export function EditorPage() {
   const [showPreview, setShowPreview] = useState(() => pref("preview", true));
   const [showSources, setShowSources] = useState(() => pref("sources", true));
   const [dragging, setDragging] = useState(false);
+  const wide = useWide();
+  const previewOn = showPreview && wide;
   const showSourcesRef = useRef(showSources);
 
   const save = useCallback(async () => {
@@ -283,19 +298,20 @@ export function EditorPage() {
           </div>
           <button
             className="primary"
+            title="Watch this document being written"
             onClick={async () => {
               await save();
               location.hash = `#/view?local=${docId.current}`;
             }}
           >
-            Replay &amp; verify
+            ▶ Replay
           </button>
         </div>
       </div>
       <input ref={fileInput} type="file" accept=".json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
-      <div className={"panes" + (showPreview ? " split" : "")}>
+      <div className={"panes" + (previewOn ? " split" : "")}>
         <div className="editor-host" ref={host} />
-        {showPreview && <div className="preview md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />}
+        {previewOn && <div className="preview md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />}
       </div>
       <div className="statusbar">
         <span>{total.toLocaleString()} characters</span>
@@ -322,17 +338,19 @@ export function EditorPage() {
           />
           Highlight non-typed text
         </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={showPreview}
-            onChange={(e) => {
-              setShowPreview(e.target.checked);
-              setPref("preview", e.target.checked);
-            }}
-          />
-          Preview
-        </label>
+        {wide && (
+          <label>
+            <input
+              type="checkbox"
+              checked={showPreview}
+              onChange={(e) => {
+                setShowPreview(e.target.checked);
+                setPref("preview", e.target.checked);
+              }}
+            />
+            Preview
+          </label>
+        )}
         <span className={saveErr ? "error" : "muted"}>{saveErr ?? saveMsg}</span>
       </div>
     </div>

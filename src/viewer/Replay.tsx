@@ -1,42 +1,77 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { decodeRanges } from "../prov/format";
+import { decodeRanges, type ProvDoc } from "../prov/format";
 import type { Analysis } from "./analyze";
-import { escapeHtml, fmtClock } from "../util";
+import { escapeHtml } from "../util";
 
-const PAUSE_CAP_MS = 2000; // pauses longer than this are shortened in the replay
-
-const DURATIONS: [string, number][] = [
-  ["10 s", 10],
-  ["30 s", 30],
-  ["1 min", 60],
-  ["3 min", 180],
-  ["Real pace", 0],
+// Replay timing. For Fast/Normal/Slow, gaps up to PAUSE_MS are typing rhythm
+// and keep their proportions, sped up so that all typing takes `typing`
+// seconds (or at real pace, if faster). A longer pause also gets a visible beat that grows with the log of
+// its length (`beat` ms per factor of e), so a five-minute pause reads as a
+// real stop without taking five minutes. The typing-pace speeds use the
+// recorded timing with each gap capped at MAX_PAUSE_MS, played `mult` times
+// faster.
+const PAUSE_MS = 3000;
+const MAX_PAUSE_MS = 5000;
+type Speed = { typing: number; beat: number } | { mult: number };
+const SPEEDS: [string, string, Speed][] = [
+  ["fast", "Fast", { typing: 30, beat: 200 }],
+  ["normal", "Normal", { typing: 60, beat: 430 }],
+  ["slow", "Slow", { typing: 150, beat: 800 }],
+  ["x10", "Typing pace ×10", { mult: 10 }],
+  ["x5", "Typing pace ×5", { mult: 5 }],
+  ["x2", "Typing pace ×2", { mult: 2 }],
+  ["x1", "Typing pace", { mult: 1 }],
 ];
+
+// Sources highlighted in the replay: text that did not come from typing in
+// this document. Copies within the document are not highlighted.
+const HIGHLIGHT = new Set(["p", "x", "o"]);
+
+function timing(events: ProvDoc["events"], key: string) {
+  const sp = (SPEEDS.find((s) => s[0] === key) ?? SPEEDS[1])[2];
+  const gap = (i: number) => events[i][1] - events[i - 1][1];
+  const ct = new Float64Array(events.length);
+  if ("mult" in sp) {
+    for (let i = 1; i < events.length; i++) ct[i] = ct[i - 1] + Math.min(gap(i), MAX_PAUSE_MS) / sp.mult;
+  } else {
+    let rhythm = 0;
+    for (let i = 1; i < events.length; i++) rhythm += Math.min(gap(i), PAUSE_MS);
+    // Short documents are never played slower than they were typed.
+    const scale = rhythm ? Math.min(1, (sp.typing * 1000) / rhythm) : 1;
+    for (let i = 1; i < events.length; i++) {
+      const g = gap(i);
+      ct[i] = ct[i - 1] + scale * Math.min(g, PAUSE_MS) + (g > PAUSE_MS ? sp.beat * Math.log(g / PAUSE_MS) : 0);
+    }
+  }
+  return ct;
+}
+
+const fmt = (ms: number) => {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+};
 
 export function Replay({ a }: { a: Analysis }) {
   const { doc, tl, res } = a;
   const events = doc.events;
-  const ct = useMemo(() => {
-    const out = new Float64Array(events.length);
-    for (let i = 1; i < events.length; i++) out[i] = out[i - 1] + Math.min(events[i][1] - events[i - 1][1], PAUSE_CAP_MS);
-    return out;
-  }, [events]);
+  const [speed, setSpeed] = useState("normal");
+  const ct = useMemo(() => timing(events, speed), [events, speed]);
   const total = events.length ? ct[events.length - 1] : 0;
   const [pos, setPos] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const [dur, setDur] = useState(30);
-  const [showSrc, setShowSrc] = useState(true);
+  const [playing, setPlaying] = useState(true);
   const textRef = useRef<HTMLDivElement>(null);
   const posRef = useRef(0);
   posRef.current = pos;
 
   useEffect(() => {
     if (!playing) return;
-    const rate = dur ? total / (dur * 1000) : 1;
     let last = performance.now();
     let raf = 0;
     const step = (now: number) => {
-      const next = Math.min(total, posRef.current + (now - last) * rate);
+      const next = Math.min(total, posRef.current + (now - last));
       last = now;
       setPos(next);
       if (next >= total) setPlaying(false);
@@ -44,19 +79,19 @@ export function Replay({ a }: { a: Analysis }) {
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [playing, dur, total]);
+  }, [playing, total]);
 
-  // Number of events applied at this replay position.
-  let k = 0;
-  {
+  // Number of events applied at replay time p.
+  const eventsAt = (p: number, times: Float64Array) => {
     let lo = 0, hi = events.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (ct[mid] <= pos) lo = mid + 1;
+      if (times[mid] <= p) lo = mid + 1;
       else hi = mid;
     }
-    k = pos <= 0 ? Math.min(1, events.length) : lo;
-  }
+    return p <= 0 ? Math.min(1, events.length) : lo;
+  };
+  const k = eventsAt(pos, ct);
 
   const html = useMemo(() => {
     if (!tl) return "";
@@ -68,17 +103,17 @@ export function Replay({ a }: { a: Analysis }) {
       else if (ev[0] === "d") caret = ev[2];
       else if (ev[0] === "r") caret = ev[2] + decodeRanges(ev[4]).length;
     }
+    const hl = (id: number) => HIGHLIGHT.has(res.chars[id].src);
     const parts: string[] = [];
     let i = 0;
     while (i < live.length || i === caret) {
       if (i === caret) parts.push('<span class="caret"></span>');
       if (i >= live.length) break;
-      const id = live[i];
-      const known = tl.finalIndex[id] >= 0;
-      const src = res.chars[id].src;
+      const known = tl.finalIndex[live[i]] >= 0;
+      const pasted = hl(live[i]);
       let j = i + 1;
-      while (j < live.length && j !== caret && tl.finalIndex[live[j]] >= 0 === known && res.chars[live[j]].src === src) j++;
-      const cls = (known ? "" : "ghost ") + (showSrc && src !== "t" ? `src-${src}` : "");
+      while (j < live.length && j !== caret && tl.finalIndex[live[j]] >= 0 === known && hl(live[j]) === pasted) j++;
+      const cls = [!known && "ghost", pasted && "pasted"].filter(Boolean).join(" ");
       let s = "";
       if (known) for (let m = i; m < j; m++) s += doc.text[tl.finalIndex[live[m]]];
       else s = "░".repeat(j - i);
@@ -86,7 +121,7 @@ export function Replay({ a }: { a: Analysis }) {
       i = j;
     }
     return parts.join("");
-  }, [k, tl, events, res, doc.text, showSrc]);
+  }, [k, tl, events, res, doc.text]);
 
   useEffect(() => {
     if (!textRef.current) return;
@@ -94,24 +129,26 @@ export function Replay({ a }: { a: Analysis }) {
     if (playing) textRef.current.querySelector(".caret")?.scrollIntoView({ block: "nearest" });
   }, [html, playing]);
 
-  const t = events[k - 1]?.[1] ?? 0;
+  const done = pos >= total && total > 0;
+  const end = events[events.length - 1]?.[1] ?? 0;
   return (
     <div className="replay">
       <div className="replay-controls">
         <button
-          className="primary"
+          className="primary replay-play"
           onClick={() => {
-            if (!playing && pos >= total) setPos(0);
+            if (!playing && done) setPos(0);
             setPlaying(!playing);
           }}
         >
-          {playing ? "Pause" : pos >= total && total > 0 ? "Replay" : "Play"}
+          {playing ? "❚❚ Pause" : done ? "↺ Replay" : "▶ Play"}
         </button>
         <input
           type="range"
+          className="replay-seek"
           min={0}
           max={total}
-          step={Math.max(1, total / 2000)}
+          step="any"
           value={pos}
           aria-label="Replay position"
           onChange={(e) => {
@@ -119,30 +156,31 @@ export function Replay({ a }: { a: Analysis }) {
             setPos(Number(e.target.value));
           }}
         />
-        <label>
-          Duration{" "}
-          <select value={dur} onChange={(e) => setDur(Number(e.target.value))}>
-            {DURATIONS.map(([l, v]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <input type="checkbox" checked={showSrc} onChange={(e) => setShowSrc(e.target.checked)} /> Tint non-typed
-        </label>
-      </div>
-      <div className="replay-meta muted small">
-        <span>{fmtClock(doc.t0 + t)}</span>
-        <span>
-          event {k.toLocaleString()} of {events.length.toLocaleString()}
+        <span className="replay-clock">
+          {fmt(events[k - 1]?.[1] ?? 0)} / {fmt(end)}
         </span>
-        <span>
-          <span className="ghost">░░</span> text that was later deleted (its content is not recorded)
-        </span>
+        <select
+          value={speed}
+          aria-label="Replay speed"
+          onChange={(e) => {
+            // Keep the same point in the writing when the speed changes.
+            const next = timing(events, e.target.value);
+            setPos(done ? next[events.length - 1] : next[Math.max(0, k - 1)]);
+            setSpeed(e.target.value);
+          }}
+        >
+          {SPEEDS.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="replay-text" ref={textRef} />
+      <p className="replay-note muted small">
+        <span className="pasted">Highlighted</span> text was pasted, imported, or inserted without a keystroke rather than typed.{" "}
+        <span className="ghost">░░</span> marks text that was later deleted; its content was never recorded. Long pauses are shortened.
+      </p>
     </div>
   );
 }

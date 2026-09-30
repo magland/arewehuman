@@ -24,15 +24,9 @@ Deletions, undo/redo, and moves (cut and paste within the document, drag and dro
 
 The values of deleted characters are held in memory only for the current session (to support undo) and are never written to the log, to browser storage, or to exported files. The history does show that a passage of a given length existed at a given place and time.
 
-## Verifying
+## Replaying
 
-The Verify page accepts a `.prov.json` file (optionally with its `.md` file) and
-
-- replays the event log and checks that it reproduces the text exactly,
-- checks the SHA-256 hash chain over the events and the seal binding the final text,
-- shows a replay in which later-deleted text appears as placeholder blocks,
-- colors the final text by source or by the time it was written,
-- reports typing statistics and flags patterns that suggest scripted input (keystroke gaps under 15 ms, very regular rhythm, multi-character "typed" inserts).
+The Replay page accepts a `.prov.json` file (optionally with its `.md` file), checks that the event log reproduces the text exactly and that the SHA-256 hash chain and seal are intact, and then plays back the writing of the document. Speeds are Fast, Normal, and Slow (typing compressed into about 30 s, 60 s, or 150 s, with long pauses shown as short beats) or the recorded typing pace at ×1, ×2, ×5, or ×10. Pasted, imported, or otherwise non-typed text is highlighted, and later-deleted text appears as placeholder blocks.
 
 A provenance file can be linked directly as `https://magland.github.io/arewehuman/#/view?url=<url of the .prov.json>`, provided the host allows cross-origin requests (a raw GitHub gist URL works).
 

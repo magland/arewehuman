@@ -27,7 +27,7 @@ export function App() {
           Write
         </a>
         <a href="#/view" className={page === "view" ? "on" : ""}>
-          Verify
+          Replay
         </a>
         <a href="#/about" className={page === "about" ? "on" : ""}>
           About
