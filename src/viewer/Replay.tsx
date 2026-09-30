@@ -3,15 +3,15 @@ import { decodeRanges, type ProvDoc } from "../prov/format";
 import type { Analysis } from "./analyze";
 import { escapeHtml } from "../util";
 
-// Replay timing. For Fast/Normal/Slow, gaps up to PAUSE_MS are typing rhythm
-// and keep their proportions, sped up so that all typing takes `typing`
-// seconds (or at real pace, if faster). A longer pause also gets a visible beat that grows with the log of
-// its length (`beat` ms per factor of e), so a five-minute pause reads as a
-// real stop without taking five minutes. The typing-pace speeds use the
-// recorded timing with each gap capped at MAX_PAUSE_MS, played `mult` times
-// faster.
+// Replay timing, identical to the player on jeremy.magland.org
+// (src/components/ProvenanceReplay.astro). For Fast/Normal/Slow, gaps up to
+// PAUSE_MS are typing rhythm and keep their proportions, sped up so that all
+// typing takes `typing` seconds (or real pace, if that is faster). A longer
+// pause gets a beat that grows with the log of its length (`beat` ms per
+// factor of e). The typing-pace speeds use the recorded timing played `mult`
+// times faster. At every speed no pause is shown for longer than MAX_SHOWN_MS.
 const PAUSE_MS = 3000;
-const MAX_PAUSE_MS = 5000;
+const MAX_SHOWN_MS = 1000;
 type Speed = { typing: number; beat: number } | { mult: number };
 const SPEEDS: [string, string, Speed][] = [
   ["fast", "Fast", { typing: 30, beat: 200 }],
@@ -25,24 +25,21 @@ const SPEEDS: [string, string, Speed][] = [
 
 // Sources highlighted in the replay: text that did not come from typing in
 // this document. Copies within the document are not highlighted.
-const HIGHLIGHT = new Set(["p", "x", "o"]);
+const UNTYPED = new Set(["p", "x", "o"]);
 
 function timing(events: ProvDoc["events"], key: string) {
   const sp = (SPEEDS.find((s) => s[0] === key) ?? SPEEDS[1])[2];
   const gap = (i: number) => events[i][1] - events[i - 1][1];
-  const ct = new Float64Array(events.length);
-  if ("mult" in sp) {
-    for (let i = 1; i < events.length; i++) ct[i] = ct[i - 1] + Math.min(gap(i), MAX_PAUSE_MS) / sp.mult;
-  } else {
+  let shown: (g: number) => number;
+  if ("mult" in sp) shown = (g) => g / sp.mult;
+  else {
     let rhythm = 0;
     for (let i = 1; i < events.length; i++) rhythm += Math.min(gap(i), PAUSE_MS);
-    // Short documents are never played slower than they were typed.
     const scale = rhythm ? Math.min(1, (sp.typing * 1000) / rhythm) : 1;
-    for (let i = 1; i < events.length; i++) {
-      const g = gap(i);
-      ct[i] = ct[i - 1] + scale * Math.min(g, PAUSE_MS) + (g > PAUSE_MS ? sp.beat * Math.log(g / PAUSE_MS) : 0);
-    }
+    shown = (g) => scale * Math.min(g, PAUSE_MS) + (g > PAUSE_MS ? sp.beat * Math.log(g / PAUSE_MS) : 0);
   }
+  const ct = new Float64Array(events.length);
+  for (let i = 1; i < events.length; i++) ct[i] = ct[i - 1] + Math.min(shown(gap(i)), MAX_SHOWN_MS);
   return ct;
 }
 
@@ -103,17 +100,17 @@ export function Replay({ a }: { a: Analysis }) {
       else if (ev[0] === "d") caret = ev[2];
       else if (ev[0] === "r") caret = ev[2] + decodeRanges(ev[4]).length;
     }
-    const hl = (id: number) => HIGHLIGHT.has(res.chars[id].src);
+    const hl = (id: number) => UNTYPED.has(res.chars[id].src);
     const parts: string[] = [];
     let i = 0;
     while (i < live.length || i === caret) {
       if (i === caret) parts.push('<span class="caret"></span>');
       if (i >= live.length) break;
       const known = tl.finalIndex[live[i]] >= 0;
-      const pasted = hl(live[i]);
+      const untyped = hl(live[i]);
       let j = i + 1;
-      while (j < live.length && j !== caret && tl.finalIndex[live[j]] >= 0 === known && hl(live[j]) === pasted) j++;
-      const cls = [!known && "ghost", pasted && "pasted"].filter(Boolean).join(" ");
+      while (j < live.length && j !== caret && tl.finalIndex[live[j]] >= 0 === known && hl(live[j]) === untyped) j++;
+      const cls = [!known && "ghost", untyped && "untyped"].filter(Boolean).join(" ");
       let s = "";
       if (known) for (let m = i; m < j; m++) s += doc.text[tl.finalIndex[live[m]]];
       else s = "░".repeat(j - i);
@@ -178,8 +175,8 @@ export function Replay({ a }: { a: Analysis }) {
       </div>
       <div className="replay-text" ref={textRef} />
       <p className="replay-note muted small">
-        <span className="pasted">Highlighted</span> text was pasted, imported, or inserted without a keystroke rather than typed.{" "}
-        <span className="ghost">░░</span> marks text that was later deleted; its content was never recorded. Long pauses are shortened.
+        <span className="untyped">Highlighted</span> text was not typed. <span className="ghost">░░</span> marks text that was later deleted;
+        its content was never recorded. Long pauses are shortened.
       </p>
     </div>
   );

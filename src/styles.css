@@ -167,7 +167,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .replay-note { margin: 10px 0 0; }
 .ghost { color: var(--muted); opacity: 0.55; letter-spacing: -0.5px; }
-.pasted { background: color-mix(in srgb, var(--s-p) var(--tint), transparent); border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.untyped { background: color-mix(in srgb, var(--s-p) var(--tint), transparent); border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .caret { display: inline-block; width: 0; height: 1.2em; border-left: 2px solid var(--accent); vertical-align: text-bottom; margin-right: -2px; }
 
 @media (max-width: 760px) {
