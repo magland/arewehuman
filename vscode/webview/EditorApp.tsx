@@ -3,6 +3,7 @@ import { Annotation, Prec, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { createEditor, setSourceHighlight } from "../../src/editor/cm";
 import { Recorder } from "../../src/editor/recorder";
+import { MemoryClips, type ClipEntry, type ClipRegistry } from "../../src/editor/clips";
 import { SRC_LABEL, type ProvDoc, type Src } from "../../src/prov/format";
 import { parseProvDoc } from "../../src/util";
 import { vscode } from "./api";
@@ -20,11 +21,27 @@ function diff(a: string, b: string) {
   return { from: s, to: a.length - e, insert: b.slice(s, b.length - e) };
 }
 
+// Copies are also kept by the extension, so that a cut pasted back after the
+// webview reloads (the editor was closed and reopened) is still a move.
+class HostClips implements ClipRegistry {
+  mem = new MemoryClips();
+  put(e: ClipEntry) {
+    this.mem.put(e);
+    vscode.postMessage({ type: "clip", entry: e });
+  }
+  get(nonce: string) {
+    return this.mem.get(nonce);
+  }
+}
+const clips = new HostClips();
+
 interface Init {
   text: string; // the document as VS Code has it
   prov: string | null; // the sidecar file, if any
   title: string;
   startNow: boolean; // write the sidecar right away
+  clips: ClipEntry[]; // recent copies made in recording editors
+  key: string; // the document's URI, which identifies it to the clip registry
 }
 
 export function EditorApp() {
@@ -86,9 +103,12 @@ export function EditorApp() {
     return { ins: c.insert.length, del: c.to - c.from };
   }, []);
 
+  const docKey = useRef("");
   const mount = useCallback(
     (r: Recorder, startText: string, text: string) => {
       view.current?.destroy();
+      r.clips = clips;
+      r.docKey = docKey.current;
       rec.current = r;
       const extra = [
         EditorView.updateListener.of((u) => {
@@ -122,6 +142,8 @@ export function EditorApp() {
   const init = useCallback(
     async (m: Init) => {
       title.current = m.title;
+      for (const e of m.clips ?? []) clips.mem.put(e);
+      docKey.current = m.key;
       const { front: f, body } = splitFrontmatter(m.text);
       setFront(f);
       setFrontOpen(!!f.trim());

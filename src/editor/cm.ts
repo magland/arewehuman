@@ -13,6 +13,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { Recorder } from "./recorder";
+import { CLIP_MIME, clipPayload, parseClipPayload } from "./clips";
 
 const KEY_WINDOW_MS = 1000;
 
@@ -23,17 +24,35 @@ function recordingPlugin(rec: Recorder, onChange: () => void) {
   // text injected without key events is not counted as typed.
   let lastKey = -Infinity;
   let lastReplacement = -Infinity;
-  const plugin = ViewPlugin.define(() => ({
-    update(u: ViewUpdate) {
-      const now = performance.now();
-      const hints = { typedOk: now - lastKey < KEY_WINDOW_MS, replacement: now - lastReplacement < 200 };
-      for (const tr of u.transactions) rec.apply(tr, Date.now() - rec.t0, hints);
-      if (u.docChanged) {
-        lastKey = -Infinity;
-        onChange();
-      }
-    },
-  }));
+  let pasteNonce: string | null | undefined;
+  const plugin = ViewPlugin.define((view) => {
+    // CodeMirror's copy handler, on the content element, clears the clipboard
+    // and puts the text on it. This listener, on the outer element, runs after
+    // it and adds the nonce of the copy that the recorder just captured.
+    const addNonce = (e: ClipboardEvent) => {
+      if (e.defaultPrevented && e.clipboardData && rec.clip) e.clipboardData.setData(CLIP_MIME, clipPayload(rec.clip.nonce));
+    };
+    view.dom.addEventListener("copy", addNonce);
+    view.dom.addEventListener("cut", addNonce);
+    return {
+      update(u: ViewUpdate) {
+        const now = performance.now();
+        const hints = { typedOk: now - lastKey < KEY_WINDOW_MS, replacement: now - lastReplacement < 200, pasteNonce };
+        for (const tr of u.transactions) {
+          rec.apply(tr, Date.now() - rec.t0, hints);
+          if (tr.isUserEvent("input.paste")) pasteNonce = undefined;
+        }
+        if (u.docChanged) {
+          lastKey = -Infinity;
+          onChange();
+        }
+      },
+      destroy() {
+        view.dom.removeEventListener("copy", addNonce);
+        view.dom.removeEventListener("cut", addNonce);
+      },
+    };
+  });
   const handlers = Prec.highest(
     EditorView.domEventHandlers({
       // Only the fact that a key was pressed is used, never which key.
@@ -59,6 +78,10 @@ function recordingPlugin(rec: Recorder, onChange: () => void) {
       },
       cut: (_e, view) => {
         rec.captureClip(view.state, "cut");
+        return false;
+      },
+      paste: (e: ClipboardEvent) => {
+        pasteNonce = e.clipboardData ? parseClipPayload(e.clipboardData.getData(CLIP_MIME)) : undefined;
         return false;
       },
     }),

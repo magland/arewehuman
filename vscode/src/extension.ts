@@ -34,6 +34,10 @@ const pendingStart = new Set<string>();
 // Files the user chose to edit as plain text this session; never redirected.
 const textChosen = new Set<string>();
 
+// Recent copies made in recording editors (see src/editor/clips.ts): nonces
+// and character ids, never text. Kept here so that they outlive a webview.
+let clipLog: unknown[] = [];
+
 // One open recording editor. The recorder itself lives in the webview; the
 // extension keeps the TextDocument in step with it and writes the sidecar.
 class Session {
@@ -62,6 +66,8 @@ class Session {
         prov: await readText(provUri(this.document.uri)),
         title: baseName(this.document.uri).replace(/\.md$/i, ""),
         startNow: pendingStart.delete(key),
+        clips: clipLog,
+        key,
       });
       this.ready();
     } else if (m.type === "edit") {
@@ -73,6 +79,8 @@ class Session {
     } else if (m.type === "response") {
       this.reqs.get(m.id)?.(m.doc);
       this.reqs.delete(m.id);
+    } else if (m.type === "clip") {
+      clipLog = [...clipLog, m.entry].slice(-20);
     } else if (m.type === "notice") {
       vscode.window.showWarningMessage(`arewehuman: ${m.text}`);
     }

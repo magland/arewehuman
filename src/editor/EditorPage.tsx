@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
 import { createEditor, setSourceHighlight } from "./cm";
 import { Recorder } from "./recorder";
+import { LocalStorageClips } from "./clips";
 import { deleteDoc, lastDocId, listDocs, loadDoc, newId, saveDoc, setLastDocId, type DocMeta } from "../storage";
 import { exportDoc, exportMd, parseProvDoc } from "../util";
 import { renderMarkdown } from "../markdown";
@@ -24,6 +25,9 @@ function setPref(k: string, v: boolean) {
     /* ignore */
   }
 }
+
+// Kept in localStorage, so that a cut pasted back after a reload is a move.
+const clips = new LocalStorageClips();
 
 // The preview is shown only when the window is wide enough for two panes.
 const WIDE = "(min-width: 1000px)";
@@ -86,6 +90,8 @@ export function EditorPage() {
   const mount = useCallback(
     (id: string, r: Recorder, initialText: string, t: string) => {
       view.current?.destroy();
+      r.clips = clips;
+      r.docKey = id;
       rec.current = r;
       docId.current = id;
       titleRef.current = t;

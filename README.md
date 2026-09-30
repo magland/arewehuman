@@ -22,6 +22,8 @@ Each character gets an implicit id, the time it was inserted (in milliseconds), 
 
 Deletions, undo/redo, and moves (cut and paste within the document, drag and drop, moving a line) are recorded with their times and positions. Undo and moves restore the original character ids, so moving your own paragraph does not make it look pasted. The log is described precisely in [SPEC.md](SPEC.md).
 
+To recognize its own cuts, the editor puts a random nonce on the clipboard next to the plain text, under a type that other applications ignore, so copied text pastes normally anywhere else. A cut pasted back into the same document is then a move even after a reload. Text pasted from another document, including another recorded one, counts as pasted, since its history is not part of this document's. See "Copy and paste" in [SPEC.md](SPEC.md).
+
 The values of deleted characters are held in memory only for the current session (to support undo) and are never written to the log, to browser storage, or to exported files. The history does show that a passage of a given length existed at a given place and time.
 
 ## Replaying

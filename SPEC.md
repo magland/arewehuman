@@ -42,6 +42,12 @@ For restore events, `kind` is `u` (undo or redo) or `m` (moved: cut and pasted w
 
 A single editor transaction may produce several events with the same `t`. Within a transaction, deletions are listed first (last position first), followed by insertions and restorations (first position first).
 
+## Copy and paste
+
+This section describes editor behavior; it does not affect the file format. When text is copied or cut, a recording editor puts two things on the clipboard: the plain text, which any application can paste, and a JSON object `{"arewehuman": 1, "nonce": "…"}` under the type `application/x-arewehuman`, which other applications ignore. The nonce is random. The editor keeps a registry, outside the provenance file, that maps each recent nonce to the document and the ids of the copied characters. The registry holds no text, so cut text is not stored.
+
+On paste, the editor looks the nonce up in its registry rather than trusting the clipboard, since any program can write to the clipboard. Characters cut from the same document that are still deleted are restored with their original ids (a restore of kind `m`), including in a later session, provided the pasted text lines up one to one with them. Any other paste from the same document is a copy (`c`). A paste from another document, or with a nonce the registry does not know, is an ordinary paste (`p`): the history of text written elsewhere is not part of this document's log, so a replay could not show how it was written. Without any nonce, the editor falls back to comparing the pasted text with the last copy made in the current session.
+
 ## Derived per-character records
 
 Replaying the log from an empty document gives, for every id ever created: its source, its insertion time, the times at which it was deleted, restored, or moved, and, if it is present at the end, its index in the final text (and hence its value). The Data tab of the viewer exports this table as CSV.

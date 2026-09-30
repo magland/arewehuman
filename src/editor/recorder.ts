@@ -1,12 +1,19 @@
 import { Transaction, type EditorState } from "@codemirror/state";
 import { genesis, nextHash, sealHash, sha256 } from "../prov/chain";
-import { APP, encodeRanges, FORMAT, FORMAT_VERSION, type Ev, type ProvDoc, type RestoreKind, type Src } from "../prov/format";
+import { APP, decodeRanges, encodeRanges, FORMAT, FORMAT_VERSION, randomId, type Ev, type ProvDoc, type RestoreKind, type Src } from "../prov/format";
 import { replay, spliceIn } from "../prov/replay";
+import { MemoryClips, type ClipRegistry } from "./clips";
+
+// Used by recorders that are not given a registry of their own.
+const defaultClips = new MemoryClips();
 
 // What the view layer observed around a transaction.
 export interface Hints {
   typedOk: boolean; // a keydown or IME composition happened just before
   replacement: boolean; // the browser reported a spellcheck/autocorrect replacement
+  // For a paste: the nonce found on the clipboard (see clips.ts), null if the
+  // clipboard had none, undefined if the paste event was not seen.
+  pasteNonce?: string | null;
 }
 
 // Text copied or cut from this document, kept in memory only.
@@ -16,6 +23,7 @@ export interface Clip {
   ids: number[]; // their ids (same length as raw)
   parts: string[]; // per-range contents
   clipText: string; // what CodeMirror puts on the clipboard
+  nonce: string; // identifies this copy on the clipboard
 }
 
 interface Change {
@@ -33,6 +41,11 @@ interface Change {
 export class Recorder {
   events: Ev[];
   readonly t0: number;
+  // Identifies this document to the clip registry, so that a cut is restored
+  // only in the document it came from. Set by the host (a storage key or file
+  // URI) so that it lasts across sessions; not written to the provenance file.
+  docKey = randomId();
+  clips: ClipRegistry = defaultClips;
   live: number[]; // ids aligned with the document
   src: Src[] = []; // by id
   alive: boolean[] = []; // by id
@@ -150,7 +163,9 @@ export class Recorder {
       });
       return { ids, src: "o" as Src, kind: "m" as RestoreKind };
     }
+    if (tr.isUserEvent("input.paste") && hints.pasteNonce) return this.classifyPaste(T, hints.pasteNonce);
     if (tr.isUserEvent("input.paste")) {
+      // No nonce on the clipboard: fall back to comparing with this session's last copy.
       const clip = this.clip;
       if (clip && clip.kind === "cut" && T === clip.raw && clip.ids.length === T.length && clip.ids.every((id) => !this.alive[id])) {
         clip.kind = "copy"; // a second paste is a copy
@@ -166,6 +181,26 @@ export class Recorder {
     else if (tr.isUserEvent("input.complete")) src = "o";
     else if (tr.isUserEvent("input") || tr.isUserEvent("indent")) src = hints.typedOk && !hints.replacement ? "t" : "o";
     return { ids: none(), src, kind: "m" as RestoreKind };
+  }
+
+  // A paste whose clipboard names a copy made in a recording editor. A cut from
+  // this document is restored (a move) if the pasted text lines up one to one
+  // with the cut characters; otherwise a paste from this document is a copy.
+  // Text from another document is an ordinary paste: its history is not part
+  // of this document's, so a replay could not show how it was written.
+  private classifyPaste(T: string, nonce: string) {
+    const none = (): (number | null)[] => new Array(T.length).fill(null);
+    const e = this.clips.get(nonce);
+    const valid =
+      e && typeof e.doc === "string" && Array.isArray(e.ranges) && e.ranges.length % 2 === 0 &&
+      e.ranges.every((x, j) => Number.isInteger(x) && (j % 2 ? x > 0 : x >= 0));
+    if (!e || !valid || e.doc !== this.docKey) return { ids: none(), src: "p" as Src, kind: "m" as RestoreKind };
+    const ids = decodeRanges(e.ranges);
+    if (ids.length === T.length && new Set(ids).size === ids.length && ids.every((id) => id < this.nextId && !this.alive[id])) {
+      if (this.clip?.nonce === nonce) this.clip.kind = "copy";
+      return { ids, src: "o" as Src, kind: "m" as RestoreKind };
+    }
+    return { ids: none(), src: "c" as Src, kind: "m" as RestoreKind };
   }
 
   // Undo/redo re-inserts text where it was deleted. Match it against this
@@ -249,7 +284,10 @@ export class Recorder {
       ids.push(...this.live.slice(r.from, r.to));
       raw += state.sliceDoc(r.from, r.to);
     }
-    this.clip = { kind, raw, ids, parts, clipText };
+    const nonce = randomId();
+    this.clip = { kind, raw, ids, parts, clipText, nonce };
+    this.clips.put({ nonce, doc: this.docKey, ranges: encodeRanges(ids), t: Date.now() });
+    return nonce;
   }
 
   // Extends the hash chain over the events recorded so far.

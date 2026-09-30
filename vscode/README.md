@@ -27,6 +27,7 @@ Then open this folder in VS Code and press F5, or run `code --extensionDevelopme
 
 - The Markdown preview does not scroll with the recording editor.
 - Only one recording editor per file.
+- A cut is recognized as a move when pasted back into the same file while VS Code stays open, including after closing and reopening the editor. After a restart, or from another window, it is recorded as pasted.
 - Renaming or moving the `.md` file does not move its `.prov.json`.
 - Reverting the file, or VS Code restoring a dirty file after a restart without the webview's saved state, is recorded as "other".
 - Recording in VS Code is no harder to forge than recording in the browser. The limitations in the main README apply unchanged.

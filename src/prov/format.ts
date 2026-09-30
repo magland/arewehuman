@@ -68,3 +68,7 @@ export function decodeRanges(r: number[]): number[] {
   for (let k = 0; k + 1 < r.length; k += 2) for (let j = 0; j < r[k + 1]; j++) ids.push(r[k] + j);
   return ids;
 }
+
+export function randomId(): string {
+  return crypto.randomUUID();
+}

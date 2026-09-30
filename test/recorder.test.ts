@@ -1,11 +1,12 @@
 import { EditorSelection, EditorState, type TransactionSpec } from "@codemirror/state";
 import { history, isolateHistory, redo, undo } from "@codemirror/commands";
 import { describe, expect, it } from "vitest";
-import { Recorder } from "../src/editor/recorder";
+import { Recorder, type Hints } from "../src/editor/recorder";
 import { verifyChain } from "../src/prov/chain";
 import { replay, Timeline } from "../src/prov/replay";
+import { MemoryClips } from "../src/editor/clips";
 
-const typed = { typedOk: true, replacement: false };
+const typed: Hints = { typedOk: true, replacement: false };
 
 class Harness {
   state = EditorState.create({ doc: "", extensions: [history()] });
@@ -31,14 +32,19 @@ class Harness {
   select(from: number, to: number) {
     this.state = this.state.update({ selection: EditorSelection.single(from, to) }).state;
   }
-  paste(s: string) {
+  // `nonce` is what the clipboard carried: undefined if the paste event was not seen.
+  paste(s: string, nonce?: string | null) {
     const { from, to } = this.state.selection.main;
-    this.dispatch({ changes: { from, to, insert: s }, selection: { anchor: from + s.length }, userEvent: "input.paste" });
+    this.dispatch({ changes: { from, to, insert: s }, selection: { anchor: from + s.length }, userEvent: "input.paste" }, { ...typed, pasteNonce: nonce });
   }
   cut() {
-    this.rec.captureClip(this.state, "cut");
+    const nonce = this.rec.captureClip(this.state, "cut");
     const { from, to } = this.state.selection.main;
     this.dispatch({ changes: { from, to }, userEvent: "delete.cut" });
+    return nonce;
+  }
+  copy() {
+    return this.rec.captureClip(this.state, "copy");
   }
   run(cmd: typeof undo) {
     cmd({ state: this.state, dispatch: (tr) => { this.rec.apply(tr, (this.t += 100), typed); this.state = tr.state; } });
@@ -214,5 +220,73 @@ describe("recorder", () => {
       const r = replay({ events: doc.events.slice(0, k), text: "" });
       expect(tl.stateAt(k)).toEqual(r.live);
     }
+  });
+
+  describe("clipboard nonces", () => {
+    const shared = () => {
+      const clips = new MemoryClips();
+      const a = new Harness();
+      const b = new Harness();
+      a.rec.clips = clips;
+      b.rec.clips = clips;
+      return { a, b };
+    };
+
+    it("records text from another document as pasted", async () => {
+      const { a, b } = shared();
+      a.type("hello world");
+      a.select(6, 11);
+      const nonce = a.cut();
+      b.type("say ");
+      b.paste("world", nonce);
+      expect(b.srcString()).toBe("ttttppppp");
+      await b.check();
+    });
+
+    it("moves text cut in an earlier session of the same document", async () => {
+      const clips = new MemoryClips();
+      const h = new Harness();
+      h.rec.clips = clips;
+      h.type("one two ");
+      const ids = h.rec.live.slice(0, 4);
+      h.select(0, 4);
+      const nonce = h.cut();
+      const { doc } = await h.check();
+      const key = h.rec.docKey;
+      h.rec = Recorder.resume(doc, doc.t0 + 1e6);
+      h.rec.clips = clips;
+      h.rec.docKey = key;
+      h.select(4, 4);
+      h.paste("one ", nonce);
+      expect(h.text()).toBe("two one ");
+      expect(h.rec.live.slice(4)).toEqual(ids);
+      // pasting it again is a copy
+      h.paste("one ", nonce);
+      expect(h.srcString()).toBe("ttttttttcccc");
+      await h.check();
+    });
+
+    it("treats an unknown nonce as an outside paste", async () => {
+      const h = new Harness();
+      h.rec.clips = new MemoryClips();
+      h.type("abc ");
+      h.select(0, 3);
+      h.copy();
+      h.select(4, 4);
+      h.paste("abc", "forged");
+      expect(h.srcString()).toBe("ttttppp");
+      await h.check();
+    });
+
+    it("records a copy within the document when the paste does not line up", async () => {
+      const a = new Harness();
+      a.rec.clips = new MemoryClips();
+      a.type("line");
+      a.select(4, 4);
+      const nonce = a.copy(); // line-wise copy of the last line: "line", pasted as "line\n"
+      a.paste("line\n", nonce);
+      expect(a.srcString()).toBe("tttt" + "ccccc");
+      await a.check();
+    });
   });
 });
