@@ -9,7 +9,8 @@ The recording editor is a custom editor for `.md` files. It runs the web app's C
 We chose a webview over VS Code's own text editor because the extension API does not say whether a change came from a keystroke, a paste, an autocompletion or another extension. Inside the webview the recorder sees the same key and clipboard events as in the browser. The trade-off is that the recording editor does not have VS Code's keybindings, Vim mode, or other extensions.
 
 - A `.md` file with a `.prov.json` next to it opens in the recording editor. Choosing "Reopen Editor With… Text Editor", or the "Reopen as Plain Text" button, opens it as plain text for the rest of the session. The setting `arewehuman.autoOpen` turns the redirect off.
-- A `.md` file without one opens as plain text. "Record with arewehuman" (editor title bar, Explorer context menu) starts a recording in which the current text is marked as imported. "arewehuman: New Recorded Document…" creates an empty one.
+- A `.md` file without one opens as plain text. "Record with arewehuman" (editor title bar, Explorer context menu) starts a recording in which the current text is marked as imported. "arewehuman: New Recorded Document…" creates an empty one, in the folder of the current file by default.
+- A leading YAML frontmatter block (between `---` lines) is metadata rather than writing, so it is not recorded. The recording editor shows it in a separate field above the text ("Add frontmatter" in the status bar), and the recorded text is the rest of the file. A site that checks a post against its recording should therefore compare the text after the frontmatter.
 - Changes made to the file outside the recording editor (another editor, git, an AI agent, a file change on disk) are recorded as "other" the next time the recording editor sees them.
 - A `.prov.json` file opens in the replay viewer. "Show Replay" in the editor title bar shows the current recording, including unsaved edits.
 

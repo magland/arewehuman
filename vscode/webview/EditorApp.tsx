@@ -6,6 +6,7 @@ import { Recorder } from "../../src/editor/recorder";
 import { SRC_LABEL, type ProvDoc, type Src } from "../../src/prov/format";
 import { parseProvDoc } from "../../src/util";
 import { vscode } from "./api";
+import { joinFrontmatter, splitFrontmatter } from "./frontmatter";
 
 // Marks transactions that mirror a change made outside the webview, so they are
 // not sent back to the extension.
@@ -37,6 +38,15 @@ export function EditorApp() {
   const [problem, setProblem] = useState<{ message: string; text: string } | null>(null);
   const [showSources, setShowSources] = useState<boolean>(() => vscode.getState()?.showSources ?? true);
   const showSourcesRef = useRef(showSources);
+  // The file's frontmatter, which is edited here but not recorded.
+  const front = useRef("");
+  const [frontText, setFrontText] = useState("");
+  const [frontOpen, setFrontOpen] = useState(false);
+  const setFront = (f: string) => {
+    front.current = f;
+    setFrontText(f);
+  };
+  const postText = (body: string) => vscode.postMessage({ type: "edit", text: joinFrontmatter(front.current, body) });
 
   const currentDoc = useCallback(async (): Promise<ProvDoc | null> => {
     const r = rec.current, v = view.current;
@@ -65,7 +75,9 @@ export function EditorApp() {
   const applyHost = useCallback((text: string, reason: "undo" | "redo" | null) => {
     const v = view.current;
     if (!v) return { ins: 0, del: 0 };
-    const c = diff(v.state.doc.toString(), text);
+    const { front: f, body } = splitFrontmatter(text);
+    if (f !== front.current) setFront(f);
+    const c = diff(v.state.doc.toString(), body);
     if (c.from === c.to && !c.insert) return { ins: 0, del: 0 };
     v.dispatch({
       changes: c,
@@ -80,8 +92,7 @@ export function EditorApp() {
       rec.current = r;
       const extra = [
         EditorView.updateListener.of((u) => {
-          if (u.docChanged && !u.transactions.every((tr) => tr.annotation(fromHost)))
-            vscode.postMessage({ type: "edit", text: u.state.doc.toString() });
+          if (u.docChanged && !u.transactions.every((tr) => tr.annotation(fromHost))) postText(u.state.doc.toString());
         }),
         // Keep undo/redo keys away from VS Code, which would otherwise undo the
         // TextDocument as well as CodeMirror undoing the editor. This must run
@@ -111,6 +122,9 @@ export function EditorApp() {
   const init = useCallback(
     async (m: Init) => {
       title.current = m.title;
+      const { front: f, body } = splitFrontmatter(m.text);
+      setFront(f);
+      setFrontOpen(!!f.trim());
       // Prefer the webview's own saved state when it extends the sidecar file
       // (edits made since the last save).
       let side: ProvDoc | null = null;
@@ -135,10 +149,10 @@ export function EditorApp() {
         }
       }
       if (m.prov) {
-        setProblem({ message: err ?? "unknown error", text: m.text });
+        setProblem({ message: err ?? "unknown error", text: body });
         return;
       }
-      mount(Recorder.fresh(Date.now(), m.text), m.text, m.text);
+      mount(Recorder.fresh(Date.now(), body), body, m.text);
       if (m.startNow) vscode.postMessage({ type: "writeProv", doc: await currentDoc() });
     },
     [mount, currentDoc],
@@ -178,7 +192,7 @@ export function EditorApp() {
           <button
             onClick={() => {
               setProblem(null);
-              mount(Recorder.fresh(Date.now(), problem.text), problem.text, problem.text);
+              mount(Recorder.fresh(Date.now(), problem.text), problem.text, joinFrontmatter(front.current, problem.text));
             }}
           >
             Start a new recording
@@ -191,6 +205,25 @@ export function EditorApp() {
           <span>{note}</span>
           <span className="spacer" />
           <button onClick={() => setNote(null)}>Dismiss</button>
+        </div>
+      )}
+      {frontOpen && (
+        <div className="frontmatter">
+          <label className="muted small" htmlFor="awh-front">
+            Frontmatter (not recorded)
+          </label>
+          <textarea
+            id="awh-front"
+            spellCheck={false}
+            value={frontText}
+            placeholder={"---\ntitle: …\n---"}
+            rows={Math.min(12, Math.max(3, frontText.split("\n").length))}
+            onChange={(e) => {
+              front.current = e.target.value;
+              setFrontText(e.target.value);
+              if (view.current) postText(view.current.state.doc.toString());
+            }}
+          />
         </div>
       )}
       <div className="editor-host" ref={host} />
@@ -210,6 +243,9 @@ export function EditorApp() {
           ) : null,
         )}
         <span className="spacer" />
+        <button className="linkish" onClick={() => setFrontOpen((o) => !o)} title="Metadata at the top of the file, such as a title or date, which is not part of the recording">
+          {frontOpen ? "Hide frontmatter" : frontText.trim() ? "Frontmatter" : "Add frontmatter"}
+        </button>
         <label>
           <input
             type="checkbox"

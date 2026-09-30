@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { splitFrontmatter } from "../webview/frontmatter";
 
 const EDITOR = "arewehuman.editor";
 const VIEWER = "arewehuman.viewer";
@@ -7,6 +8,8 @@ const isMd = (u: vscode.Uri) => /\.md$/i.test(u.path);
 const provUri = (md: vscode.Uri) => md.with({ path: md.path.replace(/\.md$/i, "") + ".prov.json" });
 const mdUri = (prov: vscode.Uri) => prov.with({ path: prov.path.replace(/\.prov\.json$/i, "") + ".md" });
 const baseName = (u: vscode.Uri) => u.path.split("/").pop()!;
+// The recorded part of a Markdown file: everything after its frontmatter.
+const bodyOf = (text: string | null) => (text === null ? null : splitFrontmatter(text).body);
 
 async function exists(u: vscode.Uri) {
   try {
@@ -117,7 +120,7 @@ class Session {
 
   async writeProv(doc: any) {
     if (!doc) return;
-    if (doc.text !== this.document.getText())
+    if (doc.text !== splitFrontmatter(this.document.getText()).body)
       vscode.window.showWarningMessage("arewehuman: the recorded text differs from the document being saved; the provenance file may not match.");
     await vscode.workspace.fs.writeFile(provUri(this.document.uri), new TextEncoder().encode(JSON.stringify(doc)));
   }
@@ -180,7 +183,7 @@ class ViewerProvider implements vscode.CustomTextEditorProvider {
 
   resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel) {
     const send = async () =>
-      panel.webview.postMessage({ type: "show", prov: document.getText(), md: await readText(mdUri(document.uri)) });
+      panel.webview.postMessage({ type: "show", prov: document.getText(), md: bodyOf(await readText(mdUri(document.uri))) });
     setupViewer(this.ctx, panel, send);
     const sub = vscode.workspace.onDidChangeTextDocument((e) => {
       if (e.document === document) void send();
@@ -248,7 +251,9 @@ export function activate(ctx: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("arewehuman.newDocument", async (arg?: unknown) => {
-      const folder = arg instanceof vscode.Uri ? arg : vscode.workspace.workspaceFolders?.[0]?.uri;
+      const active = targetUri(undefined);
+      const folder =
+        arg instanceof vscode.Uri ? arg : active?.scheme === "file" ? vscode.Uri.joinPath(active, "..") : vscode.workspace.workspaceFolders?.[0]?.uri;
       const uri = await vscode.window.showSaveDialog({
         defaultUri: folder ? vscode.Uri.joinPath(folder, "untitled.md") : undefined,
         filters: { Markdown: ["md"] },

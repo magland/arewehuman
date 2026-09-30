@@ -19,6 +19,8 @@ A provenance file (`*.prov.json`) is a JSON object holding the final text of a M
 }
 ```
 
+`text` is the recorded document. A tool that records a Markdown file with a leading YAML frontmatter block may leave that block out of `text`, as the VS Code extension does, since frontmatter is metadata rather than writing; `text` is then the file with its frontmatter (and the blank lines after it) removed.
+
 `t0` is the start time in milliseconds since the Unix epoch, and `created` is the same instant in ISO form. Line breaks in `text` are `\n`. Positions and lengths count UTF-16 code units, as JavaScript strings do, so a character outside the Basic Multilingual Plane (for example most emoji) occupies two positions and two ids.
 
 ## Events
