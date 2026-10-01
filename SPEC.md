@@ -1,6 +1,6 @@
 # Recording file format, version 2
 
-A Markdown document `name.md` is recorded in `name.md.awh.jsonl` next to it. The recording holds the complete log of edits that produced the document, followed by its current text. The log contains no character values, except that it marks which characters are line breaks; the value of any other character is known only if it survives into the current text.
+A Markdown document `name.md` is recorded in `name.md.awh.jsonl` next to it, or, in a project with a `.arewehuman` directory at its root, in `.arewehuman/<path of the document>/<workspace>.awh.jsonl`, one recording per workspace (see `vscode/README.md`). Where a recording is kept does not affect its contents. The recording holds the complete log of edits that produced the document, followed by its current text. The log contains no character values, except that it marks which characters are line breaks; the value of any other character is known only if it survives into the current text.
 
 The file is in JSON Lines format: one JSON value per line, each line ending in `\n`. It has three parts.
 

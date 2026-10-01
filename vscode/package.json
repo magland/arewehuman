@@ -16,7 +16,7 @@
       {
         "viewType": "arewehuman.viewer",
         "displayName": "arewehuman replay",
-        "selector": [{ "filenamePattern": "*.md.awh.jsonl" }],
+        "selector": [{ "filenamePattern": "*.awh.jsonl" }],
         "priority": "default"
       }
     ],
@@ -46,6 +46,11 @@
           "type": "boolean",
           "default": true,
           "description": "Highlight text in recorded documents that was not typed (pasted, copied, imported or other)."
+        },
+        "arewehuman.workspaceName": {
+          "type": "string",
+          "default": "",
+          "description": "In a project with a .arewehuman directory, the name of this workspace's recordings (a short random suffix is added). Defaults to git's user.name. It is chosen once per clone, the first time a file is recorded there, and kept in .git/arewehuman-workspace."
         }
       }
     }

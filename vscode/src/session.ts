@@ -1,20 +1,12 @@
 import * as vscode from "vscode";
 import { Recorder, type Cause, type Change } from "../../src/editor/recorder";
 import type { ProvDoc, Src } from "../../src/prov/format";
+import { diffText } from "../../src/prov/diff";
 import { splitFrontmatter } from "./frontmatter";
 
 // The recorded text of a Markdown file: everything after its frontmatter, with
 // \n line breaks.
 export const bodyOf = (text: string) => splitFrontmatter(text).body.replace(/\r\n/g, "\n");
-
-function diff(a: string, b: string): Change | null {
-  let s = 0;
-  while (s < a.length && s < b.length && a[s] === b[s]) s++;
-  let e = 0;
-  while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
-  if (s === a.length - e && s === b.length - e) return null;
-  return { fromA: s, toA: a.length - e, fromB: s, text: b.slice(s, b.length - e), removed: a.slice(s, a.length - e) };
-}
 
 // The offset of a position in `text`, which need not be the document's current text.
 function offsetIn(text: string, p: vscode.Position) {
@@ -33,6 +25,7 @@ const spansKey = (spans: [number, number][]) =>
   JSON.stringify(spans.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]));
 
 const sorted = (s: string) => Array.from(s).sort().join("");
+const size = (cs: Change[]) => cs.reduce((n, c) => n + c.text.length + c.removed.length, 0);
 
 // An edit that removes exactly the characters it inserts, such as moving a line
 // or dragging a selection, is a move: the characters keep their ids.
@@ -58,7 +51,9 @@ export class Session {
   readonly outsideChange: { del: number; ins: number } | null;
   // The state before the last edit, if that edit only deleted text (see captureCopy).
   private lastDeletion: { text: string; live: number[]; spans: string } | null = null;
-  // The recording file, as this session last wrote or read it; null if unknown.
+  // The recording file, and its contents as this session last wrote or read
+  // them (null if unknown).
+  log: vscode.Uri | null = null;
   disk: OnDisk | null = null;
 
   // `recorded` is the text the recorder currently holds. If the document
@@ -69,9 +64,11 @@ export class Session {
     recorded: string,
   ) {
     this.text = document.getText();
-    const c = diff(recorded, bodyOf(this.text));
-    this.outsideChange = c ? { del: c.toA - c.fromA, ins: c.text.length } : null;
-    if (c) rec.applyChanges([c], Date.now() - rec.t0, "other");
+    const cs = diffText(recorded, bodyOf(this.text));
+    this.outsideChange = cs.length
+      ? { del: cs.reduce((n, c) => n + c.removed.length, 0), ins: cs.reduce((n, c) => n + c.text.length, 0) }
+      : null;
+    if (cs.length) rec.applyChanges(cs, Date.now() - rec.t0, "other");
   }
 
   get body() {
@@ -92,10 +89,15 @@ export class Session {
     if (!changes) {
       // The frontmatter changed, or the file has \r\n line breaks: compare the
       // recorded text as a whole.
-      const c = diff(bodyOf(old), this.body);
-      if (!c) return;
-      changes = [c];
+      changes = diffText(bodyOf(old), this.body);
+      if (!changes.length) return;
       if (splitFrontmatter(old).front !== splitFrontmatter(this.text).front) cause = "other";
+    } else if (cause === "other") {
+      // An edit from elsewhere, such as the file being reloaded after it changed
+      // on disk, may replace far more than it changes. Record only what changed.
+      const cs = diffText(bodyOf(old), this.body);
+      if (size(cs) < size(changes)) changes = cs;
+      if (!changes.length) return;
     }
     if ((cause === "other" || cause === "drop") && isMove(changes)) cause = "move";
     this.rec.applyChanges(changes, Date.now() - this.rec.t0, cause, pasteNonce);

@@ -42,7 +42,7 @@ Future work will add server-signed timestamps on the hash chain, which would sho
 
 ## VS Code extension
 
-A prototype extension in [`vscode/`](vscode/) records Markdown files edited in VS Code's own editor, using the same recorder and file format, and shows replays of `.md.awh.jsonl` files. See [vscode/README.md](vscode/README.md).
+A prototype extension in [`vscode/`](vscode/) records Markdown files edited in VS Code's own editor, using the same recorder and file format, and shows replays of `.md.awh.jsonl` files. A project can keep its recordings in a `.arewehuman` directory, one per workspace, so that collaborators working through git never have to merge them. See [vscode/README.md](vscode/README.md).
 
 ## Development
 
