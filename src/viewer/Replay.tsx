@@ -100,6 +100,7 @@ export function Replay({ a, start }: { a: Analysis; start?: number }) {
     const ev = events[k - 1];
     if (ev) {
       if (ev[0] === "i") caret = ev[2] + ev[3];
+      else if (ev[0] === "k") caret = ev[2] + decodeRanges(ev[4]).length;
       else if (ev[0] === "d") caret = ev[2];
       else if (ev[0] === "r") caret = ev[2] + decodeRanges(ev[4]).length;
     }

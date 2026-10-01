@@ -9,7 +9,7 @@ The file is in JSON Lines format: one JSON value per line, each line ending in `
 3. A final object holding the current text and the seal. It is replaced, not appended to, at every save, so the file never holds the text of an earlier state.
 
 ```
-{"format":"arewehuman","version":2,"app":{"name":"arewehuman","version":"0.1.0","url":"https://github.com/magland/arewehuman"},"created":"2026-09-29T10:00:00.000Z","t0":1790676000000}
+{"format":"arewehuman","version":2,"id":"8f1c…","app":{"name":"arewehuman","version":"0.1.0","url":"https://github.com/magland/arewehuman"},"created":"2026-09-29T10:00:00.000Z","t0":1790676000000}
 ["s",0]
 ["i",1834,0,1,"t"]
 ["i",1990,1,1,"t"]
@@ -25,7 +25,7 @@ A recording tool saves by writing the new events and checkpoints where the old f
 
 `text` is the recorded document. A tool that records a Markdown file with a leading YAML frontmatter block may leave that block out of `text`, as the VS Code extension does, since frontmatter is metadata rather than writing; `text` is then the file with its frontmatter (and the blank lines after it) removed. `title` is optional.
 
-`t0` is the start time in milliseconds since the Unix epoch, and `created` is the same instant in ISO form. Line breaks in `text` are `\n`. Positions and lengths count UTF-16 code units, as JavaScript strings do, so a character outside the Basic Multilingual Plane (for example most emoji) occupies two positions and two ids.
+`id` is a random identifier, by which other recordings of the same project refer to this one (see "Text from another file" below). Recordings made before 2026-10-01 have none; they are referred to by `t0`, written as a decimal string. `t0` is the start time in milliseconds since the Unix epoch, and `created` is the same instant in ISO form. Line breaks in `text` are `\n`. Positions and lengths count UTF-16 code units, as JavaScript strings do, so a character outside the Basic Multilingual Plane (for example most emoji) occupies two positions and two ids.
 
 Version 1 stored the same information as a single JSON object in `name.prov.json`, with the events in an `events` array, the checkpoints as `[end, hash]` pairs, and the text and seal at the top level. Since the hash chain is unchanged, a version 1 file converts to version 2 with the same hashes. The web app reads both versions.
 
@@ -42,14 +42,17 @@ Every inserted character receives an implicit id: the first inserted character i
 | delete | `["d", t, pos, n]` | the `n` characters at `pos` were deleted |
 | restore | `["r", t, pos, kind, ranges]` | previously deleted characters reinserted at `pos` |
 | commit | `["g", t, commit]` | the workspace was at this git commit (a lowercase hex hash) |
+| from another file | `["k", t, pos, rec, ranges]` or `["k", t, pos, rec, ranges, breaks]` | characters `ranges` of recording `rec` moved or copied in at `pos`, with the next ids and source `k` |
 
 `breaks` lists the line breaks among the inserted characters, as increasing offsets from the start of the insert, so `["i", 5000, 12, 4, "p", [1, 3]]` inserts `?\n?\n`. It is left out when there are none. A replay can then keep the line structure of text that was later deleted, which matters most for code. The cost is that the record shows how a deleted passage was divided into lines, though not what it said. Recordings made before 2026-10-01 have no `breaks`, so in those the line breaks of deleted text are unknown.
 
-`src` is one of `t` (typed), `p` (pasted from outside the document), `c` (copied from within the document), `x` (imported), `o` (other). A character's source never changes.
+`src` is one of `t` (typed), `p` (pasted from outside the document), `c` (copied from within the document), `x` (imported), `o` (other). A character's source never changes. Characters added by a `k` event have source `k`, which an insert never has.
 
 For restore events, `kind` is `u` (undo or redo) or `m` (moved: cut and pasted within the document, dragged, or a line moved), and `ranges` lists the restored ids in order as flattened `[start, length]` pairs, so `[10, 3, 40, 1]` means ids 10, 11, 12, 40. A restored id must currently be deleted.
 
 A commit event is recorded, when the document is in a git repository, before changes that arrive from outside the editor (as after a `git pull`), if the commit has changed since the last one noted, and at the start of a recording that begins with text already in the file. It changes nothing in the document. With the repository's history, it tells which version of the files those changes came from, so that a later tool can match them exactly with another workspace's recording (see "Several workspaces" below).
+
+A `k` event (see "Text from another file" below) adds characters like an insert, one for each id in `ranges`, which use the same flattened `[start, length]` form as a restore and name characters of the recording whose `id` (or `t0`) is `rec`. `breaks` is as for an insert.
 
 A single editor transaction may produce several events with the same `t`. Within a transaction, deletions are listed first (last position first), followed by insertions and restorations (first position first).
 
@@ -57,11 +60,17 @@ A single editor transaction may produce several events with the same `t`. Within
 
 This section describes editor behavior; it does not affect the file format. When text is copied or cut, a recording editor puts two things on the clipboard: the plain text, which any application can paste, and a JSON object `{"arewehuman": 1, "nonce": "…"}` under the type `application/x-arewehuman`, which other applications ignore. The nonce is random. The editor keeps a registry, outside the recording, that maps each recent nonce to the document and the ids of the copied characters. The registry holds no text, so cut text is not stored.
 
-On paste, the editor looks the nonce up in its registry rather than trusting the clipboard, since any program can write to the clipboard. Characters cut from the same document that are still deleted are restored with their original ids (a restore of kind `m`), including in a later session, provided the pasted text lines up one to one with them. Any other paste from the same document is a copy (`c`). A paste from another document, or with a nonce the registry does not know, is an ordinary paste (`p`): the history of text written elsewhere is not part of this document's log, so a replay could not show how it was written. Without any nonce, the editor falls back to comparing the pasted text with the last copy made in the current session.
+On paste, the editor looks the nonce up in its registry rather than trusting the clipboard, since any program can write to the clipboard. Characters cut from the same document that are still deleted are restored with their original ids (a restore of kind `m`), including in a later session, provided the pasted text lines up one to one with them. Any other paste from the same document is a copy (`c`). A paste from another document, or with a nonce the registry does not know, is an ordinary paste (`p`): the history of text written elsewhere is not part of this document's log, so a replay could not show how it was written. The exception is a paste between two files of a `.arewehuman` project in the same workspace, described next. Without any nonce, the editor falls back to comparing the pasted text with the last copy made in the current session.
+
+## Text from another file
+
+In a project that keeps its recordings in a `.arewehuman` directory, the recordings of all its files travel together, so text moved or copied from one file to another can refer to the recording it came from. When a recording editor pastes text that was cut or copied from another file of the same project, in the same workspace, and the pasted text lines up one to one with the copied characters, it records a `k` event naming the source recording and characters instead of a paste. The registry entry for a copy records the project, the workspace and the source recording's `id` for this purpose. References are never made between workspaces (whose recordings stay independent) or outside a `.arewehuman` project.
+
+A `k` character is new in the recording that receives it, and its value is known there only if it survives, as for any character. A viewer that has the source recording follows the reference to the character's origin there, provided that the two recordings agree on its value wherever both know it; otherwise, or without the source recording, the character counts as coming from another file, which ranks with pasted text.
 
 ## Several workspaces
 
-A document edited in several clones of a git repository has one recording per workspace (see `vscode/README.md`, "Where recordings are kept"). Each recording is complete and verifiable on its own, and none refers to another; text that arrived from another workspace is `o` (or `x`, if it was there when the recording started). To tell who wrote what, a viewer lines up each recording's final text with the document (lines, then words, as in `diffText`), keeping only whole matching lines and matching stretches of at least 12 characters. Each character of the document is then credited to the recording in which it was typed, or else pasted, or else the earliest recording that has it. This is exact for text in the document; text that one workspace wrote and another later deleted cannot be traced across recordings, since deleted values are not recorded. Commit events are meant to allow that in future.
+A document edited in several clones of a git repository has one recording per workspace (see `vscode/README.md`, "Where recordings are kept"). Each recording is complete and verifiable on its own, and none refers to another; text that arrived from another workspace is `o` (or `x`, if it was there when the recording started). To tell who wrote what, a viewer lines up each recording's final text with the document (lines, then words, as in `diffText`), keeping only whole matching lines and matching stretches of at least 12 characters. Each character of the document is then credited to the recording in which it was typed, or else pasted, or else the earliest recording that has it, following `k` references to the recording a character came from. Stretches of at least 20 characters that were not written in place are also looked for in the final text of every other recording of the project, which finds copies between files made outside a recording editor. This is exact for text in the document; text that one workspace wrote and another later deleted cannot be traced across recordings, since deleted values are not recorded. Commit events are meant to allow that in future.
 
 ## Derived per-character records
 

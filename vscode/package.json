@@ -24,16 +24,19 @@
       { "command": "arewehuman.newDocument", "title": "New Recorded Document…", "category": "arewehuman" },
       { "command": "arewehuman.record", "title": "Record with arewehuman", "category": "arewehuman", "icon": "$(record)" },
       { "command": "arewehuman.replay", "title": "Show Replay", "category": "arewehuman", "icon": "$(play-circle)" },
-      { "command": "arewehuman.toggleHighlight", "title": "Toggle Highlighting of Non-Typed Text", "category": "arewehuman" }
+      { "command": "arewehuman.toggleHighlight", "title": "Toggle Highlighting of Non-Typed Text", "category": "arewehuman" },
+      { "command": "arewehuman.configureProject", "title": "Configure Project…", "category": "arewehuman" }
     ],
+    "jsonValidation": [{ "fileMatch": "**/.arewehuman/config.json", "url": "./schemas/config.schema.json" }],
     "menus": {
       "editor/title": [
         { "command": "arewehuman.replay", "when": "arewehuman.recording", "group": "navigation@2" },
         { "command": "arewehuman.record", "when": "editorLangId == markdown && resourceExtname == .md && !arewehuman.recording", "group": "navigation@9" }
       ],
       "explorer/context": [
-        { "command": "arewehuman.record", "when": "resourceExtname == .md", "group": "navigation@9" },
-        { "command": "arewehuman.newDocument", "when": "explorerResourceIsFolder", "group": "navigation@9" }
+        { "command": "arewehuman.record", "when": "!explorerResourceIsFolder", "group": "navigation@9" },
+        { "command": "arewehuman.newDocument", "when": "explorerResourceIsFolder", "group": "navigation@9" },
+        { "command": "arewehuman.configureProject", "when": "explorerResourceIsFolder", "group": "navigation@9" }
       ],
       "commandPalette": [
         { "command": "arewehuman.replay", "when": "arewehuman.recording" }

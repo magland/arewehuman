@@ -1,6 +1,6 @@
 import type { EditorState, Transaction } from "@codemirror/state";
 import { genesis, nextHash, sealHash, sha256 } from "../prov/chain";
-import { APP, decodeRanges, encodeRanges, FORMAT, FORMAT_VERSION, insertEv, randomId, type Ev, type ProvDoc, type RestoreKind, type Src } from "../prov/format";
+import { APP, decodeRanges, encodeRanges, FORMAT, FORMAT_VERSION, fromEv, insertEv, randomId, recordingRef, type Ev, type ProvDoc, type RestoreKind, type Src } from "../prov/format";
 import { replay, spliceIn } from "../prov/replay";
 import { MemoryClips, type ClipRegistry } from "./clips";
 
@@ -67,6 +67,11 @@ export class Recorder {
   // URI) so that it lasts across sessions; not written to the recording.
   docKey = randomId();
   clips: ClipRegistry = defaultClips;
+  // In a .arewehuman project, identifies the project and workspace (set by the
+  // host). Text pasted from another recording with the same project is recorded
+  // as coming from there ("k"); otherwise it is pasted.
+  project: string | null = null;
+  readonly id: string | undefined;
   live: number[]; // ids aligned with the document
   src: Src[] = []; // by id
   alive: boolean[] = []; // by id
@@ -78,8 +83,9 @@ export class Recorder {
   private chainTask: Promise<string>;
   private commit: string | null = null; // the last commit noted
 
-  private constructor(t0: number, events: Ev[], checkpoints: [number, string][] | null) {
+  private constructor(t0: number, events: Ev[], checkpoints: [number, string][] | null, id: string | undefined) {
     this.t0 = t0;
+    this.id = id;
     this.events = events;
     const res = replay({ events, text: "" });
     this.live = res.live;
@@ -102,14 +108,14 @@ export class Recorder {
     const events: Ev[] = [["s", 0]];
     if (commit && imported.length) events.push(["g", 0, commit]);
     if (imported.length) events.push(insertEv(0, 0, imported, "x"));
-    return new Recorder(t0, events, null);
+    return new Recorder(t0, events, null, randomId());
   }
 
   // Resume a document. Throws if the log does not replay to the given text.
   static resume(doc: ProvDoc, now: number): Recorder {
     const res = replay(doc);
     if (res.errors.length) throw new Error("Provenance log is invalid: " + res.errors[0]);
-    const r = new Recorder(doc.t0, doc.events.slice(), doc.chain?.checkpoints ?? []);
+    const r = new Recorder(doc.t0, doc.events.slice(), doc.chain?.checkpoints ?? [], doc.id);
     const t = Math.max(now - doc.t0, lastTime(doc.events));
     r.events.push(["s", t]);
     return r;
@@ -117,6 +123,11 @@ export class Recorder {
 
   get nextId() {
     return this.src.length;
+  }
+
+  // What other recordings call this one.
+  get ref() {
+    return recordingRef(this);
   }
 
   // Records a CodeMirror transaction.
@@ -156,8 +167,20 @@ export class Recorder {
     // Then insertions, first to last; fromB is the position once earlier ones are in.
     for (const c of changes) {
       if (!c.text.length) continue;
-      const { ids, src, kind } = this.classify(cause, c, pool, pasteNonce);
+      const { ids, src, kind, from } = this.classify(cause, c, pool, pasteNonce);
       let pos = c.fromB;
+      if (from) {
+        // Characters from another recording: new ids here, with a reference.
+        const run: number[] = [];
+        for (let k = 0; k < c.text.length; k++) {
+          run.push(this.src.length);
+          this.src.push("k");
+          this.alive.push(false);
+        }
+        this.events.push(fromEv(t, pos, c.text, from.rec, from.ids));
+        this.insertIds(pos, run);
+        continue;
+      }
       for (let i = 0; i < ids.length; ) {
         let j = i + 1;
         const restoring = ids[i] !== null;
@@ -192,7 +215,12 @@ export class Recorder {
   }
 
   // Decides, for each inserted character, whether it restores a deleted id or is new.
-  private classify(cause: Cause, c: Change, pool: { id: number; ch: string; used?: boolean }[], pasteNonce: string | null | undefined) {
+  private classify(
+    cause: Cause,
+    c: Change,
+    pool: { id: number; ch: string; used?: boolean }[],
+    pasteNonce: string | null | undefined,
+  ): { ids: (number | null)[]; src: Src; kind: RestoreKind; from?: { rec: string; ids: number[] } } {
     const T = c.text;
     const none = (): (number | null)[] => new Array(T.length).fill(null);
     if (cause === "undo") {
@@ -226,14 +254,20 @@ export class Recorder {
   // A paste whose clipboard names a copy made in a recording editor. A cut from
   // this document is restored (a move) if the pasted text lines up one to one
   // with the cut characters; otherwise a paste from this document is a copy.
-  // Text from another document is an ordinary paste: its history is not part
-  // of this document's, so a replay could not show how it was written.
+  // Text from another document is an ordinary paste, since its history is not
+  // part of this document's and a replay could not show how it was written,
+  // except within a .arewehuman project, where the same workspace's recordings
+  // are kept together: there it refers to the characters it came from.
   private classifyPaste(T: string, nonce: string) {
     const none = (): (number | null)[] => new Array(T.length).fill(null);
     const e = this.clips.get(nonce);
     const valid =
       e && typeof e.doc === "string" && Array.isArray(e.ranges) && e.ranges.length % 2 === 0 &&
       e.ranges.every((x, j) => Number.isInteger(x) && (j % 2 ? x > 0 : x >= 0));
+    if (e && valid && e.doc !== this.docKey && this.project && e.project === this.project && typeof e.rec === "string" && e.rec !== this.ref) {
+      const ids = decodeRanges(e.ranges);
+      if (ids.length === T.length) return { ids: none(), src: "k" as Src, kind: "m" as RestoreKind, from: { rec: e.rec, ids } };
+    }
     if (!e || !valid || e.doc !== this.docKey) return { ids: none(), src: "p" as Src, kind: "m" as RestoreKind };
     const ids = decodeRanges(e.ranges);
     if (ids.length === T.length && new Set(ids).size === ids.length && ids.every((id) => id < this.nextId && !this.alive[id])) {
@@ -340,7 +374,7 @@ export class Recorder {
     }
     const nonce = randomId();
     this.clip = { kind, raw, ids, parts, clipText, nonce };
-    this.clips.put({ nonce, doc: this.docKey, ranges: encodeRanges(ids), t: Date.now() });
+    this.clips.put({ nonce, doc: this.docKey, ranges: encodeRanges(ids), t: Date.now(), ...(this.project ? { project: this.project, rec: this.ref } : {}) });
     return nonce;
   }
 
@@ -365,6 +399,7 @@ export class Recorder {
     return {
       format: FORMAT,
       version: FORMAT_VERSION,
+      ...(this.id ? { id: this.id } : {}),
       app: APP,
       title,
       created: new Date(this.t0).toISOString(),

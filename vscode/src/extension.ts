@@ -3,21 +3,31 @@ import { promises as fs } from "fs";
 import { Recorder, type Cause } from "../../src/editor/recorder";
 import { CLIP_MIME, clipPayload, MemoryClips, parseClipPayload } from "../../src/editor/clips";
 import { SRC_LABEL, type ProvDoc, type Src } from "../../src/prov/format";
-import { bodyLines, finalLine, parseLog, parseRecording, serializeLog } from "../../src/prov/log";
+import { bodyLines, finalLine, LOG_SUFFIX, parseLog, parseRecording, serializeLog } from "../../src/prov/log";
 import { sha256 } from "../../src/prov/chain";
 import { bodyOf, Session, type OnDisk } from "./session";
 import { Typing } from "./typing";
-import { gitHead, initPlaces, mdOf, moveRecordings, othersOf, placeOf, recordingsBeside } from "./places";
+import { adoptOrphan, autoPatterns, autoRecorded, configUri, findOrphan, findRoot, readConfig, writeConfig, gitHead, initPlaces, mdOf, moveRecordings, othersOf, placeOf, projectRecordings, STORE } from "./places";
 
 const VIEWER = "arewehuman.viewer";
-const MD: vscode.DocumentSelector = [
-  { language: "markdown", scheme: "file" },
-  { language: "markdown", scheme: "vscode-remote" },
-];
+const FILES: vscode.DocumentSelector = [{ scheme: "file" }, { scheme: "vscode-remote" }];
 
-const isMd = (u: vscode.Uri) => /\.md$/i.test(u.path);
 const baseName = (u: vscode.Uri) => u.path.split("/").pop()!;
-const recordable = (d: vscode.TextDocument) => (d.uri.scheme === "file" || d.uri.scheme === "vscode-remote") && isMd(d.uri);
+// Any text file can be recorded, except recordings and files in .git or .arewehuman.
+const recordable = (d: vscode.TextDocument) =>
+  (d.uri.scheme === "file" || d.uri.scheme === "vscode-remote") &&
+  !d.uri.path.endsWith(LOG_SUFFIX) &&
+  !d.uri.path.includes(`/${STORE}/`) &&
+  !d.uri.path.includes("/.git/");
+
+
+const finalText = (log: string) => {
+  try {
+    return parseLog(log).doc.text;
+  } catch {
+    return null;
+  }
+};
 
 async function exists(u: vscode.Uri) {
   try {
@@ -36,8 +46,9 @@ async function readText(u: vscode.Uri): Promise<string | null> {
   }
 }
 
-// Every open .md file that has a recording (see places.ts) is recorded, in
-// whatever text editor it is edited.
+// Every open file that has a recording (see places.ts), or matches its
+// project's autoRecord patterns, is recorded, in whatever text editor it is
+// edited.
 const sessions = new Map<string, Session>();
 const loading = new Map<string, Promise<Session | null>>();
 
@@ -125,7 +136,7 @@ function writeLog(s: Session): Promise<void> {
 
 async function writeLogNow(s: Session) {
   const doc = await s.toDoc();
-  if (doc.text !== bodyOf(s.document.getText()))
+  if (doc.text !== bodyOf(s.document.getText(), s.document.uri.path))
     vscode.window.showWarningMessage("arewehuman: the recorded text differs from the document being saved; the recording may not match.");
   const uri = s.log!;
   const mark = { events: doc.events.length, checkpoints: doc.chain.checkpoints.length };
@@ -195,9 +206,36 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   const key = doc.uri.toString();
   await persisting.get(key); // the document may have just been closed and reopened
   const place = await placeOf(doc.uri);
-  const logText = await readText(place.log);
-  const others = logText === null ? await othersOf(place) : [];
-  if (logText === null && !create && !others.length) return null;
+  let logText = await readText(place.log);
+  let others = logText === null ? await othersOf(place) : [];
+  // Files matching the project's autoRecord patterns (see places.ts) are
+  // recorded when opened, starting a recording if they have none.
+  const auto = logText === null && !create && !others.length && (await autoRecorded(doc));
+  if (logText === null && !create && !others.length && !auto) return null;
+  if (logText === null && !others.length) {
+    // The file may have been renamed or moved outside VS Code, leaving its
+    // recording behind under the old name.
+    const orphan = await findOrphan(doc.uri, place, bodyOf(doc.getText(), doc.uri.path), finalText).catch(() => null);
+    const near = orphan && orphan.similarity < 1 && `${orphan.oldFile} (${Math.round(100 * orphan.similarity)}% the same)`;
+    const take =
+      orphan &&
+      (orphan.similarity === 1 ||
+        (await vscode.window.showInformationMessage(
+          `arewehuman: ${baseName(doc.uri)} looks like ${near}, renamed outside VS Code and edited. Continue its recording?`,
+          "Continue Its Recording",
+          "Start a New Recording",
+        )) === "Continue Its Recording");
+    if (orphan && take) {
+      try {
+        await adoptOrphan(orphan);
+        logText = await readText(place.log);
+        others = logText === null ? await othersOf(place) : [];
+        vscode.window.showInformationMessage(`arewehuman: the recording of ${orphan.oldFile} now belongs to ${vscode.workspace.asRelativePath(doc.uri)}, which it was renamed to.`);
+      } catch (e) {
+        vscode.window.showWarningMessage(`arewehuman: could not move the recording of ${orphan.oldFile} (${(e as Error).message}).`);
+      }
+    }
+  }
   let side: ProvDoc | null = null;
   let disk: OnDisk | null = null;
   let err: string | null = null;
@@ -213,7 +251,7 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   // Prefer the stored unsaved edits when they extend the recording file, and
   // whichever recording matches the document as it is now.
   const saved = side && (await loadUnsaved(doc));
-  const body = bodyOf(doc.getText());
+  const body = bodyOf(doc.getText(), doc.uri.path);
   const candidates = [saved && side && saved.t0 === side.t0 && saved.events.length >= side.events.length ? saved : null, side]
     .filter((d): d is ProvDoc => !!d)
     .sort((a, b) => Number(b.text === body) - Number(a.text === body));
@@ -237,11 +275,12 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
     if (choice !== "Start a New Recording" || doc.isClosed) return null;
   }
   if (!session) {
-    const now = bodyOf(doc.getText());
+    const now = bodyOf(doc.getText(), doc.uri.path);
     session = new Session(doc, Recorder.fresh(Date.now(), now, gitHead(doc.uri)), now, () => gitHead(doc.uri));
-    create = true;
+    create = !auto;
   }
   session.log = place.log;
+  session.rec.project = place.project;
   session.rec.clips = clips;
   session.rec.docKey = key;
   sessions.set(key, session);
@@ -282,6 +321,7 @@ const colors: Record<Exclude<Src, "t">, { light: string; dark: string }> = {
   c: { light: "#1baf7a", dark: "#199e70" },
   x: { light: "#eda100", dark: "#c98500" },
   o: { light: "#e87ba4", dark: "#d55181" },
+  k: { light: "#1baf7a", dark: "#199e70" }, // from another file: shown like a copy
 };
 const decorations = Object.fromEntries(
   Object.entries(colors).map(([s, c]) => [
@@ -305,7 +345,7 @@ function update() {
   const highlight = vscode.workspace.getConfiguration("arewehuman").get<boolean>("highlightNonTyped", true);
   for (const ed of vscode.window.visibleTextEditors) {
     const s = sessions.get(ed.document.uri.toString());
-    const ranges: Record<string, vscode.Range[]> = { p: [], c: [], x: [], o: [] };
+    const ranges: Record<string, vscode.Range[]> = { p: [], c: [], x: [], o: [], k: [] };
     if (s && highlight) for (const r of s.sourceRuns()) if (r.src !== "t") ranges[r.src].push(r.range);
     for (const [src, deco] of Object.entries(decorations)) ed.setDecorations(deco, ranges[src]);
   }
@@ -319,10 +359,11 @@ function update() {
   status.text = `$(record) Recording · typed ${pct(counts.t)}%`;
   const md = new vscode.MarkdownString();
   md.appendMarkdown(`**Recording ${baseName(s.document.uri)}** in \`${vscode.workspace.asRelativePath(s.log!)}\`, which is written when you save.\n\n`);
-  md.appendMarkdown(`${total.toLocaleString()} characters: ` + (["t", "p", "c", "x", "o"] as Src[]).filter((k) => counts[k]).map((k) => `${SRC_LABEL[k]} ${pct(counts[k])}%`).join(", ") + "\n\n");
+  md.appendMarkdown(`${total.toLocaleString()} characters: ` + (["t", "p", "c", "k", "x", "o"] as Src[]).filter((k) => counts[k]).map((k) => `${SRC_LABEL[k]} ${pct(counts[k])}%`).join(", ") + "\n\n");
   if (!typing.owned)
     md.appendMarkdown("Another extension (such as a Vim emulator) handles typing, so typed text is recognized only approximately: any single character inserted in the focused editor counts as typed.\n\n");
-  md.appendMarkdown("Click to show the replay.");
+  md.appendMarkdown("Click to show the replay. [Configure which files are recorded automatically](command:arewehuman.configureProject)");
+  md.isTrusted = { enabledCommands: ["arewehuman.configureProject"] };
   status.tooltip = md;
   status.show();
 }
@@ -348,17 +389,23 @@ function webviewHtml(webview: vscode.Webview, extUri: vscode.Uri) {
 </html>`;
 }
 
-// For a file recorded in several workspaces, the message that shows who wrote
-// what and each workspace's replay. `current` is the text to use for one of
-// the recordings in place of what is on disk.
+// For a file in a .arewehuman project, the message that shows who wrote what
+// and each workspace's replay, or null if there is nothing to combine (the
+// file's only recording, and no others in the project). `current` is the text
+// to use for `log` in place of what is on disk.
 async function projectMessage(log: vscode.Uri, current: string, initial?: string) {
-  const all = await recordingsBeside(log);
-  if (all.length < 2) return null;
-  const md = await readText(mdOf(log));
-  const recs = await Promise.all(
-    all.map(async (r) => ({ name: r.name, log: r.uri.toString() === log.toString() ? current : ((await readText(r.uri)) ?? "") })),
-  );
-  return { type: "project", title: baseName(mdOf(log)).replace(/\.md$/i, ""), md: md === null ? null : bodyOf(md), recs, initial };
+  const all = await projectRecordings(log);
+  const mine = (u: vscode.Uri) => u.path.slice(0, u.path.lastIndexOf("/")) === log.path.slice(0, log.path.lastIndexOf("/"));
+  const ownFiles = all.filter((r) => mine(r.uri) && r.uri.toString() !== log.toString());
+  const otherFiles = all.filter((r) => !mine(r.uri));
+  if (!ownFiles.length && !otherFiles.length) return null;
+  const read = async (r: { uri: vscode.Uri }) => (await readText(r.uri)) ?? "";
+  const self = { name: baseName(log).slice(0, -LOG_SUFFIX.length), log: current };
+  const recs = [self, ...(await Promise.all(ownFiles.map(async (r) => ({ name: r.workspace, log: await read(r) }))))].sort((a, b) => a.name.localeCompare(b.name));
+  const others = await Promise.all(otherFiles.map(async (r) => ({ name: `${r.file} · ${r.workspace}`, log: await read(r) })));
+  const file = mdOf(log);
+  const md = await readText(file);
+  return { type: "project", title: baseName(file), md: md === null ? null : bodyOf(md, file.path), recs, others, initial };
 }
 
 class ViewerProvider implements vscode.CustomTextEditorProvider {
@@ -370,7 +417,7 @@ class ViewerProvider implements vscode.CustomTextEditorProvider {
       const project = await projectMessage(document.uri, document.getText(), name);
       if (project) return void panel.webview.postMessage(project);
       const md = await readText(mdOf(document.uri));
-      panel.webview.postMessage({ type: "show", log: document.getText(), md: md === null ? null : bodyOf(md) });
+      panel.webview.postMessage({ type: "show", log: document.getText(), md: md === null ? null : bodyOf(md, mdOf(document.uri).path) });
     };
     setupViewer(this.ctx, panel, send);
     const sub = vscode.workspace.onDidChangeTextDocument((e) => {
@@ -387,6 +434,83 @@ function setupViewer(ctx: vscode.ExtensionContext, panel: vscode.WebviewPanel, s
     if (m.type === "ready") void send();
   });
   panel.onDidDispose(() => sub.dispose());
+}
+
+// Setting up auto-recording for a project (.arewehuman/config.json).
+const COMMON_PATTERNS: [string, string][] = [
+  ["*.md", "Markdown"],
+  ["*.tex", "LaTeX"],
+  ["*.bib", "BibTeX"],
+  ["*.qmd", "Quarto"],
+  ["*.rst", "reStructuredText"],
+  ["*.txt", "Plain text"],
+];
+
+async function configureProject(arg?: unknown) {
+  // The project of the folder or file given, or of the active file; else a
+  // workspace folder, which becomes a project.
+  const target = arg instanceof vscode.Uri ? arg : vscode.window.activeTextEditor?.document.uri;
+  let isFolder = false;
+  if (target) isFolder = await vscode.workspace.fs.stat(target).then((s) => (s.type & vscode.FileType.Directory) !== 0, () => false);
+  let root = target ? await findRoot(isFolder ? vscode.Uri.joinPath(target, "_") : target) : null;
+  const creating = !root;
+  if (!root) {
+    const folder = (target && vscode.workspace.getWorkspaceFolder(target)) ?? (await vscode.window.showWorkspaceFolderPick({ placeHolder: "Project to set up for arewehuman" }));
+    if (!folder) return;
+    root = isFolder && target ? target : folder.uri;
+  }
+  const config = await readConfig(root);
+  if (config === null) {
+    await vscode.window.showTextDocument(configUri(root));
+    return;
+  }
+  const current = autoPatterns(config);
+  const ext = target && !isFolder ? /\.[^./]+$/.exec(target.path)?.[0] : undefined;
+  const choices = [...COMMON_PATTERNS];
+  if (ext && !choices.some(([p]) => p === `*${ext}`)) choices.push([`*${ext}`, "the active file's type"]);
+  for (const p of current) if (!choices.some(([q]) => q === p)) choices.push([p, "from config.json"]);
+  const picked = await vscode.window.showQuickPick(
+    choices.map(([p, d]) => ({ label: p, description: d, picked: current.includes(p) })),
+    {
+      canPickMany: true,
+      title: creating
+        ? `Set up ${baseName(root)} as an arewehuman project (recordings will be kept in .arewehuman/)`
+        : `Files to record automatically in ${baseName(root)}`,
+      placeHolder: "Files to record whenever they are opened. Other patterns can be added in .arewehuman/config.json.",
+    },
+  );
+  if (!picked) return;
+  const patterns = picked.map((p) => p.label);
+  await writeConfig(root, { ...config, autoRecord: patterns });
+  for (const d of vscode.workspace.textDocuments) if (recordable(d) && !sessions.has(d.uri.toString())) void start(d);
+  const open = await vscode.window.showInformationMessage(
+    patterns.length
+      ? `arewehuman: ${patterns.join(", ")} files in ${baseName(root)} are now recorded whenever they are opened.`
+      : `arewehuman: no files in ${baseName(root)} are recorded automatically.`,
+    "Open config.json",
+  );
+  if (open) await vscode.window.showTextDocument(configUri(root));
+}
+
+// After a file is recorded by hand in a project that does not record its type
+// automatically, offer to (once per type and project in this window).
+const suggested = new Set<string>();
+async function suggestAutoRecord(doc: vscode.TextDocument) {
+  const root = await findRoot(doc.uri);
+  const ext = /\.[^./]+$/.exec(doc.uri.path)?.[0];
+  if (!root || !ext || suggested.has(root.toString() + ext) || (await autoRecorded(doc))) return;
+  suggested.add(root.toString() + ext);
+  const all = `Record All ${ext} Files`;
+  const choice = await vscode.window.showInformationMessage(
+    `arewehuman: record every ${ext} file in this project whenever it is opened? (This is kept in .arewehuman/config.json.)`,
+    all,
+    "Configure…",
+  );
+  if (choice === all) {
+    const config = await readConfig(root);
+    if (config === null) return;
+    await writeConfig(root, { ...config, autoRecord: [...new Set([...autoPatterns(config), `*${ext}`])] });
+  } else if (choice) await configureProject(doc.uri);
 }
 
 function targetUri(arg: unknown): vscode.Uri | undefined {
@@ -428,7 +552,7 @@ export function activate(ctx: vscode.ExtensionContext) {
       if (cause === "other" || cause === "undo") void writeIfSaved(s);
       refresh();
     }),
-    // The recording is written just before the .md is saved, so the two match.
+    // The recording is written just before the file is saved, so the two match.
     vscode.workspace.onWillSaveTextDocument((e) => {
       const s = sessions.get(e.document.uri.toString());
       if (s) e.waitUntil(writeLog(s));
@@ -459,7 +583,7 @@ export function activate(ctx: vscode.ExtensionContext) {
   // is pasted or dropped.
   ctx.subscriptions.push(
     vscode.languages.registerDocumentPasteEditProvider(
-      MD,
+      FILES,
       {
         prepareDocumentPaste(document, ranges, dataTransfer) {
           const nonce = sessions.get(document.uri.toString())?.captureCopy(ranges);
@@ -480,7 +604,7 @@ export function activate(ctx: vscode.ExtensionContext) {
       },
     ),
     vscode.languages.registerDocumentDropEditProvider(
-      MD,
+      FILES,
       {
         provideDocumentDropEdits(document) {
           if (sessions.has(document.uri.toString())) markPending(document, "drop");
@@ -502,12 +626,14 @@ export function activate(ctx: vscode.ExtensionContext) {
   ctx.subscriptions.push(
     vscode.commands.registerCommand("arewehuman.record", async (arg?: unknown) => {
       const uri = targetUri(arg);
-      if (!uri || !isMd(uri)) return void vscode.window.showErrorMessage("arewehuman: open a .md file first.");
+      if (!uri || (uri.scheme !== "file" && uri.scheme !== "vscode-remote")) return void vscode.window.showErrorMessage("arewehuman: open a file first.");
       const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, { preview: false });
-      if (sessions.has(uri.toString())) return;
-      await start(doc, !(await exists((await placeOf(uri)).log)));
+      if (!sessions.has(uri.toString())) await start(doc, !(await exists((await placeOf(uri)).log)));
+      void suggestAutoRecord(doc);
     }),
+
+    vscode.commands.registerCommand("arewehuman.configureProject", configureProject),
 
     vscode.commands.registerCommand("arewehuman.newDocument", async (arg?: unknown) => {
       const active = targetUri(undefined);
@@ -515,11 +641,10 @@ export function activate(ctx: vscode.ExtensionContext) {
         arg instanceof vscode.Uri ? arg : active?.scheme === "file" ? vscode.Uri.joinPath(active, "..") : vscode.workspace.workspaceFolders?.[0]?.uri;
       const uri = await vscode.window.showSaveDialog({
         defaultUri: folder ? vscode.Uri.joinPath(folder, "untitled.md") : undefined,
-        filters: { Markdown: ["md"] },
+        filters: { Markdown: ["md"], "All files": ["*"] },
         title: "New recorded document",
       });
       if (!uri) return;
-      if (!isMd(uri)) return void vscode.window.showErrorMessage("arewehuman: the file name must end in .md.");
       if (await exists(uri))
         return void vscode.window.showErrorMessage(`arewehuman: ${baseName(uri)} already exists. Use "Record with arewehuman" on it instead.`);
       await vscode.workspace.fs.writeFile(uri, new Uint8Array());

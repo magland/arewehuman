@@ -24,6 +24,7 @@ const HOW: Record<Src, string> = {
   p: "pasted",
   x: "already in the file when recording started",
   o: "arrived from outside the editor",
+  k: "from another file, whose recording is not available",
 };
 
 // The text to explain: the Markdown file (without frontmatter, if the
@@ -58,16 +59,19 @@ interface Run {
 export function ProjectView({
   title,
   md,
-  recs,
+  recs: own,
+  others = [],
   initial,
   headerAction,
 }: {
   title: string;
   md: string | null;
-  recs: NamedRecording[];
+  recs: NamedRecording[]; // the document's recordings, one per workspace
+  others?: NamedRecording[]; // recordings of other files in the project, which text may have come from
   initial?: string; // the name of a recording whose replay to show first
   headerAction?: ReactNode;
 }) {
+  const recs = useMemo(() => [...own, ...others], [own, others]);
   const [tab, setTab] = useState<number>(() => recs.findIndex((r) => r.name === initial));
   const [start, setStart] = useState<number | undefined>(undefined);
   const [analyses, setAnalyses] = useState<Analysis[] | null>(null);
@@ -80,7 +84,7 @@ export function ProjectView({
     };
   }, [recs]);
 
-  const text = useMemo(() => documentText(md, recs), [md, recs]);
+  const text = useMemo(() => documentText(md, own), [md, own]);
   const origins = useMemo(() => attribute(text, recs.map((r) => r.doc)), [text, recs]);
   const runs = useMemo(() => {
     const out: Run[] = [];
@@ -96,6 +100,8 @@ export function ProjectView({
   const total = text.length || 1;
   const pct = (n: number) => `${Math.round((100 * n) / total)}%`;
   const byRec = recs.map((_, r) => origins.filter((o) => o?.rec === r));
+  // Tabs: the document's recordings, and other files' recordings that text came from.
+  const shown = recs.map((_, r) => r < own.length || byRec[r].length > 0 || r === tab);
   const bySrc = (s: Src[]) => origins.filter((o) => o && s.includes(o.src)).length;
   const none = origins.filter((o) => !o).length;
 
@@ -110,7 +116,7 @@ export function ProjectView({
         <div>
           <h1>{title}</h1>
           <div className="muted small">
-            {recs.length} recordings{md === null ? "; the text is the most recently saved recording's, since no .md file was given" : ""}
+            {own.length} recordings{md === null ? "; the text is the most recently saved recording's, since no .md file was given" : ""}
           </div>
         </div>
         {headerAction}
@@ -119,7 +125,7 @@ export function ProjectView({
         <button role="tab" className={"tab" + (tab < 0 ? " active" : "")} aria-selected={tab < 0} onClick={() => open(-1)}>
           Who wrote what
         </button>
-        {recs.map((r, i) => (
+        {recs.map((r, i) => shown[i] && (
           <button key={r.name} role="tab" className={"tab" + (tab === i ? " active" : "")} aria-selected={tab === i} onClick={() => open(i)}>
             <i className="swatch" style={{ background: color(i) }} /> {r.name}
           </button>
@@ -132,7 +138,7 @@ export function ProjectView({
       ) : (
         <>
           <ul className="who-legend small">
-            {recs.map((r, i) => (
+            {recs.map((r, i) => shown[i] && (
               <li key={r.name}>
                 <i className="swatch" style={{ background: color(i) }} /> <b>{r.name}</b> {pct(byRec[i].length)} of the text
                 {byRec[i].length > 0 && <> ({pct(byRec[i].filter((o) => o!.src === "t" || o!.src === "c").length)} typed)</>}
@@ -140,6 +146,7 @@ export function ProjectView({
               </li>
             ))}
             {bySrc(["p"]) > 0 && <li><i className="who-mark src-p" /> pasted {pct(bySrc(["p"]))}</li>}
+            {bySrc(["k"]) > 0 && <li><i className="who-mark src-k" /> from another file whose recording is not here {pct(bySrc(["k"]))}</li>}
             {bySrc(["x"]) > 0 && <li><i className="who-mark src-x" /> there before recording started {pct(bySrc(["x"]))}</li>}
             {bySrc(["o"]) > 0 && <li><i className="who-mark src-o" /> from outside the editor {pct(bySrc(["o"]))}</li>}
             {none > 0 && <li><i className="who-mark none" /> not in any recording {pct(none)}</li>}

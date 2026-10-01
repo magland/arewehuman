@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "arewehuman project settings",
+  "description": "Settings for a project whose recordings are kept in this .arewehuman directory. Commit this file with the project, so that everyone working on it uses the same settings.",
+  "type": "object",
+  "properties": {
+    "autoRecord": {
+      "type": "array",
+      "description": "Glob patterns of files to record whenever they are opened in VS Code, starting a recording if they have none (the recording file is created at the first save). Patterns are relative to the project root; a pattern without a slash matches the file name in any folder.",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "examples": [["*.md"], ["*.md", "papers/**/*.tex"]],
+      "defaultSnippets": [{ "label": "Markdown and LaTeX", "body": ["*.md", "*.tex"] }]
+    }
+  },
+  "additionalProperties": false
+}

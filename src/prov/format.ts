@@ -7,14 +7,17 @@ export const FORMAT_VERSION = 2;
 // Source of a character, fixed when the character is first created.
 //  t: typed       p: pasted (from outside the document)   c: copied from within the document
 //  x: imported    o: other (dictation, autocorrect, unknown)
-export type Src = "t" | "p" | "c" | "x" | "o";
-export const SRCS: Src[] = ["t", "p", "c", "x", "o"];
+//  k: moved or copied from another recording of the same workspace, in a
+//     .arewehuman project; set only by "k" events
+export type Src = "t" | "p" | "c" | "x" | "o" | "k";
+export const SRCS: Src[] = ["t", "p", "c", "x", "o", "k"];
 export const SRC_LABEL: Record<Src, string> = {
   t: "typed",
   p: "pasted",
   c: "copied within doc",
   x: "imported",
   o: "other",
+  k: "from another file",
 };
 
 // Why deleted characters came back.
@@ -35,11 +38,17 @@ export type RestoreEv = ["r", number, number, RestoreKind, number[]]; // t, pos,
 // The git commit the workspace was at, noted when changes arrived from outside
 // the editor (as after a git pull) and the commit had changed since the last note.
 export type CommitEv = ["g", number, string]; // t, commit hash
-export type Ev = SessionEv | InsertEv | DeleteEv | RestoreEv | CommitEv;
+// Characters moved or copied from another recording (in a .arewehuman project,
+// the same workspace's recording of another file), identified by that
+// recording's id. They get new ids here, with source "k". Line breaks are
+// listed as for an insert.
+export type FromEv = ["k", number, number, string, number[]] | ["k", number, number, string, number[], number[]]; // t, pos, recording, id ranges, line breaks
+export type Ev = SessionEv | InsertEv | DeleteEv | RestoreEv | CommitEv | FromEv;
 
 export interface ProvDoc {
   format: typeof FORMAT;
   version: number;
+  id?: string; // random; recordings made before 2026-10-01 have none
   app: { name: string; version: string; url: string };
   title: string;
   created: string; // ISO time of t0
@@ -60,11 +69,25 @@ export const APP = {
   url: "https://github.com/magland/arewehuman",
 };
 
-export function insertEv(t: number, pos: number, text: string, src: Src): InsertEv {
+function lineBreaks(text: string): number[] {
   const nl: number[] = [];
   for (let k = text.indexOf("\n"); k >= 0; k = text.indexOf("\n", k + 1)) nl.push(k);
+  return nl;
+}
+
+export function insertEv(t: number, pos: number, text: string, src: Src): InsertEv {
+  const nl = lineBreaks(text);
   return nl.length ? ["i", t, pos, text.length, src, nl] : ["i", t, pos, text.length, src];
 }
+
+export function fromEv(t: number, pos: number, text: string, rec: string, ids: number[]): FromEv {
+  const nl = lineBreaks(text);
+  return nl.length ? ["k", t, pos, rec, encodeRanges(ids), nl] : ["k", t, pos, rec, encodeRanges(ids)];
+}
+
+// What other recordings call this one: its id, or for an older recording without
+// one, its start time.
+export const recordingRef = (doc: Pick<ProvDoc, "id" | "t0">) => doc.id ?? String(doc.t0);
 
 export function encodeRanges(ids: number[]): number[] {
   const out: number[] = [];

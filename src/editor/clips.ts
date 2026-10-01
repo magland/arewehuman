@@ -16,6 +16,11 @@ export interface ClipEntry {
   doc: string; // the source document's key (Recorder.docKey)
   ranges: number[]; // copied character ids in document order, as [start, length, ...]
   t: number; // epoch ms
+  // In a .arewehuman project: the project and workspace, and the source
+  // recording's reference (see recordingRef), so that a paste into another
+  // recording of the same workspace can refer to these characters.
+  project?: string;
+  rec?: string;
 }
 
 export interface ClipRegistry {

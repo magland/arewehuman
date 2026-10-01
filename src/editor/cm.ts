@@ -92,6 +92,7 @@ function recordingPlugin(rec: Recorder, onChange: () => void) {
 const srcMarks = {
   p: Decoration.mark({ class: "awh-src-p" }),
   c: Decoration.mark({ class: "awh-src-c" }),
+  k: Decoration.mark({ class: "awh-src-c" }), // from another file: shown like a copy
   x: Decoration.mark({ class: "awh-src-x" }),
   o: Decoration.mark({ class: "awh-src-o" }),
 };

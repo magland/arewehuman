@@ -189,7 +189,7 @@ export function EditorPage() {
 
   const counts = useMemo(() => {
     const r = rec.current;
-    const c: Record<Src, number> = { t: 0, p: 0, c: 0, x: 0, o: 0 };
+    const c: Record<Src, number> = { t: 0, p: 0, c: 0, x: 0, o: 0, k: 0 };
     if (r) for (const id of r.live) c[r.src[id]]++;
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -322,7 +322,7 @@ export function EditorPage() {
       </div>
       <div className="statusbar">
         <span>{total.toLocaleString()} characters</span>
-        {(["t", "p", "c", "x", "o"] as Src[]).map((s) =>
+        {(["t", "p", "c", "k", "x", "o"] as Src[]).map((s) =>
           counts[s] ? (
             <span key={s} className="status-src">
               <i className={`swatch sw-${s}`} />

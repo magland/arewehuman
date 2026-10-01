@@ -4,9 +4,15 @@ import type { ProvDoc, Src } from "../../src/prov/format";
 import { diffText } from "../../src/prov/diff";
 import { splitFrontmatter } from "../../src/prov/frontmatter";
 
-// The recorded text of a Markdown file: everything after its frontmatter, with
-// \n line breaks.
-export const bodyOf = (text: string) => splitFrontmatter(text).body.replace(/\r\n/g, "\n");
+// A Markdown file's frontmatter is left out of its recording (see
+// src/prov/frontmatter.ts); other files are recorded whole.
+export const isMarkdown = (path: string) => /\.(md|markdown|mdx)$/i.test(path);
+const noFront = (text: string) => ({ front: "", body: text });
+const splitterFor = (path: string) => (isMarkdown(path) ? splitFrontmatter : noFront);
+
+// The recorded text of a file: for Markdown, everything after its frontmatter;
+// with \n line breaks.
+export const bodyOf = (text: string, path: string) => splitterFor(path)(text).body.replace(/\r\n/g, "\n");
 
 // The offset of a position in `text`, which need not be the document's current text.
 function offsetIn(text: string, p: vscode.Position) {
@@ -47,6 +53,7 @@ export interface OnDisk {
 // Code's own editor; every change event is passed to the recorder.
 export class Session {
   private text: string; // the document text as of the last change event
+  private split: (text: string) => { front: string; body: string };
   // What changed outside the recorder before this session started, if anything.
   readonly outsideChange: { del: number; ins: number } | null;
   // The state before the last edit, if that edit only deleted text (see captureCopy).
@@ -65,8 +72,9 @@ export class Session {
     recorded: string,
     private head: () => string | null = () => null,
   ) {
+    this.split = splitterFor(document.uri.path);
     this.text = document.getText();
-    const cs = diffText(recorded, bodyOf(this.text));
+    const cs = diffText(recorded, this.bodyOf(this.text));
     this.outsideChange = cs.length
       ? { del: cs.reduce((n, c) => n + c.removed.length, 0), ins: cs.reduce((n, c) => n + c.text.length, 0) }
       : null;
@@ -77,12 +85,16 @@ export class Session {
     }
   }
 
+  private bodyOf(text: string) {
+    return this.split(text).body.replace(/\r\n/g, "\n");
+  }
+
   get body() {
-    return bodyOf(this.text);
+    return this.bodyOf(this.text);
   }
 
   get frontLength() {
-    return splitFrontmatter(this.text).front.length;
+    return this.split(this.text).front.length;
   }
 
   onChange(e: vscode.TextDocumentChangeEvent, cause: Cause, pasteNonce?: string | null) {
@@ -95,13 +107,13 @@ export class Session {
     if (!changes) {
       // The frontmatter changed, or the file has \r\n line breaks: compare the
       // recorded text as a whole.
-      changes = diffText(bodyOf(old), this.body);
+      changes = diffText(this.bodyOf(old), this.body);
       if (!changes.length) return;
-      if (splitFrontmatter(old).front !== splitFrontmatter(this.text).front) cause = "other";
+      if (this.split(old).front !== this.split(this.text).front) cause = "other";
     } else if (cause === "other") {
       // An edit from elsewhere, such as the file being reloaded after it changed
       // on disk, may replace far more than it changes. Record only what changed.
-      const cs = diffText(bodyOf(old), this.body);
+      const cs = diffText(this.bodyOf(old), this.body);
       if (size(cs) < size(changes)) changes = cs;
       if (!changes.length) return;
     }
@@ -115,8 +127,8 @@ export class Session {
   // frontmatter or cannot be mapped exactly.
   private bodyChanges(old: string, events: readonly vscode.TextDocumentContentChangeEvent[]): Change[] | null {
     if (this.document.eol === vscode.EndOfLine.CRLF) return null;
-    const front = splitFrontmatter(old).front;
-    if (splitFrontmatter(this.text).front !== front) return null;
+    const front = this.split(old).front;
+    if (this.split(this.text).front !== front) return null;
     const n = front.length;
     const out: Change[] = [];
     let delta = 0;
@@ -166,9 +178,9 @@ export class Session {
       }
     }
     // Offsets in terms of the recorded text, which has no frontmatter and no \r.
-    const front = splitFrontmatter(text).front.length;
+    const front = this.split(text).front.length;
     const toBody = (o: number) => text.slice(front, Math.max(front, o)).replace(/\r\n/g, "\n").length;
-    const body = bodyOf(text);
+    const body = this.bodyOf(text);
     const inBody = spans
       .map(([a, b]) => ({ from: toBody(a), to: toBody(b) }))
       .filter((r) => r.to > r.from);
@@ -217,7 +229,7 @@ export class Session {
   }
 
   counts(): Record<Src, number> {
-    const c: Record<Src, number> = { t: 0, p: 0, c: 0, x: 0, o: 0 };
+    const c: Record<Src, number> = { t: 0, p: 0, c: 0, x: 0, o: 0, k: 0 };
     for (const id of this.rec.live) c[this.rec.src[id]]++;
     return c;
   }

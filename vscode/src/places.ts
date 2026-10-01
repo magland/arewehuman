@@ -24,6 +24,9 @@ export interface Place {
   log: vscode.Uri; // this workspace's recording of the file
   dir: vscode.Uri | null; // the file's folder in .arewehuman, or null for a recording next to the file
   workspace: string | null;
+  // In a .arewehuman project, identifies the project and this workspace, so
+  // that text moved between its files can refer to the recording it came from.
+  project: string | null;
 }
 
 const parent = (u: vscode.Uri) => vscode.Uri.joinPath(u, "..");
@@ -52,12 +55,12 @@ export async function findRoot(file: vscode.Uri): Promise<vscode.Uri | null> {
 
 export async function placeOf(md: vscode.Uri): Promise<Place> {
   const near = beside(md);
-  if (await stat(near)) return { log: near, dir: null, workspace: null };
+  if (await stat(near)) return { log: near, dir: null, workspace: null, project: null };
   const root = await findRoot(md);
-  if (!root) return { log: near, dir: null, workspace: null };
+  if (!root) return { log: near, dir: null, workspace: null, project: null };
   const dir = vscode.Uri.joinPath(root, STORE, relative(root, md));
   const workspace = await workspaceName(root);
-  return { log: vscode.Uri.joinPath(dir, workspace + LOG_SUFFIX), dir, workspace };
+  return { log: vscode.Uri.joinPath(dir, workspace + LOG_SUFFIX), dir, workspace, project: `${root.toString()}|${workspace}` };
 }
 
 // The recordings of the file made by other workspaces.
@@ -219,4 +222,148 @@ export async function recordingsBeside(log: vscode.Uri): Promise<{ name: string;
   } catch {
     return [];
   }
+}
+
+// A project's settings, in .arewehuman/config.json:
+//   { "autoRecord": ["*.md", "papers/**/*.tex"] }
+// autoRecord lists glob patterns of files to record whenever they are opened.
+// A pattern is relative to the project root; one without a slash matches the
+// file name in any folder.
+export const CONFIG = "config.json";
+const warned = new Set<string>();
+
+export const configUri = (root: vscode.Uri) => vscode.Uri.joinPath(root, STORE, CONFIG);
+
+// The project's settings: {} if there are none, or null if the file is not
+// valid JSON (with a warning, once).
+export async function readConfig(root: vscode.Uri): Promise<Record<string, unknown> | null> {
+  const file = configUri(root);
+  let text: string;
+  try {
+    text = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
+  } catch {
+    return {};
+  }
+  try {
+    const v = JSON.parse(text);
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch (e) {
+    if (!warned.has(file.toString())) {
+      warned.add(file.toString());
+      vscode.window.showWarningMessage(`arewehuman: ${vscode.workspace.asRelativePath(file)} is not valid JSON (${(e as Error).message}).`);
+    }
+    return null;
+  }
+}
+
+export async function writeConfig(root: vscode.Uri, config: Record<string, unknown>) {
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, STORE));
+  await vscode.workspace.fs.writeFile(configUri(root), new TextEncoder().encode(JSON.stringify(config, null, 2) + "\n"));
+  warned.delete(configUri(root).toString());
+}
+
+export const autoPatterns = (config: Record<string, unknown> | null): string[] =>
+  Array.isArray(config?.autoRecord) ? config.autoRecord.filter((p): p is string => typeof p === "string" && !!p) : [];
+
+export async function autoRecorded(doc: vscode.TextDocument): Promise<boolean> {
+  const root = await findRoot(doc.uri);
+  if (!root) return false;
+  const patterns = autoPatterns(await readConfig(root));
+  return patterns.some(
+    (p) => vscode.languages.match({ pattern: new vscode.RelativePattern(root, p.includes("/") ? p : `**/${p}`) }, doc) > 0,
+  );
+}
+
+// Every recording in the .arewehuman directory that `log` is in, with the file
+// each one belongs to, relative to the project root.
+export async function projectRecordings(log: vscode.Uri): Promise<{ file: string; workspace: string; uri: vscode.Uri }[]> {
+  const mark = `/${STORE}/`;
+  const k = log.path.lastIndexOf(mark);
+  if (k < 0) return [];
+  const store = log.with({ path: log.path.slice(0, k + mark.length - 1) });
+  const out: { file: string; workspace: string; uri: vscode.Uri }[] = [];
+  const walk = async (dir: vscode.Uri, rel: string) => {
+    let entries: [string, vscode.FileType][] = [];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(dir);
+    } catch {
+      return;
+    }
+    for (const [name, type] of entries) {
+      const u = vscode.Uri.joinPath(dir, name);
+      if (type & vscode.FileType.Directory) await walk(u, rel ? `${rel}/${name}` : name);
+      else if (name.endsWith(LOG_SUFFIX) && rel) out.push({ file: rel, workspace: name.slice(0, -LOG_SUFFIX.length), uri: u });
+    }
+  };
+  await walk(store, "");
+  return out;
+}
+
+// A recording left behind when its file was renamed or moved outside VS Code
+// (with git mv or in a shell): one whose file no longer exists and whose final
+// text matches `text`, exactly or closely (`similarity` from 0 to 1). For a
+// .arewehuman project, the whole folder of the old file's recordings moves.
+export interface Orphan {
+  from: vscode.Uri; // the recording, or the old file's folder in .arewehuman
+  to: vscode.Uri;
+  oldFile: string;
+  similarity: number;
+}
+
+export async function findOrphan(file: vscode.Uri, place: Place, text: string, finalText: (log: string) => string | null): Promise<Orphan | null> {
+  const candidates: { from: vscode.Uri; to: vscode.Uri; logs: vscode.Uri[]; oldFile: vscode.Uri }[] = [];
+  if (place.dir) {
+    const groups = new Map<string, vscode.Uri[]>();
+    for (const r of await projectRecordings(place.log)) groups.set(r.file, [...(groups.get(r.file) ?? []), r.uri]);
+    for (const [rel, logs] of groups) {
+      const old = vscode.Uri.joinPath(findStoreRoot(place.log), rel);
+      if (await stat(old)) continue;
+      candidates.push({ from: parent(logs[0]), to: place.dir, logs, oldFile: old });
+    }
+  } else {
+    const folder = vscode.workspace.getWorkspaceFolder(file);
+    if (folder)
+      for (const u of await vscode.workspace.findFiles(new vscode.RelativePattern(folder, `**/*${LOG_SUFFIX}`), `**/{node_modules,${STORE}}/**`, 1000)) {
+        const old = u.with({ path: u.path.slice(0, -LOG_SUFFIX.length) });
+        if (!(await stat(old))) candidates.push({ from: u, to: place.log, logs: [u], oldFile: old });
+      }
+  }
+  let best: Orphan | null = null;
+  for (const c of candidates)
+    for (const log of c.logs) {
+      const t = await vscode.workspace.fs.readFile(log).then((b) => finalText(new TextDecoder().decode(b)), () => null);
+      if (t === null) continue;
+      const sim = similarity(t, text);
+      if (sim >= 0.8 && (!best || sim > best.similarity))
+        best = { from: c.from, to: c.to, oldFile: vscode.workspace.asRelativePath(c.oldFile), similarity: sim };
+    }
+  return best;
+}
+
+// The project root of a recording in .arewehuman.
+function findStoreRoot(log: vscode.Uri) {
+  const mark = `/${STORE}/`;
+  return log.with({ path: log.path.slice(0, log.path.lastIndexOf(mark)) });
+}
+
+function similarity(a: string, b: string) {
+  if (a === b) return 1;
+  if (!a.length || !b.length) return 0;
+  let same = 0;
+  const lines = (s: string) => s.split("\n");
+  const count = new Map<string, number>();
+  for (const l of lines(a)) count.set(l, (count.get(l) ?? 0) + 1);
+  for (const l of lines(b)) {
+    const n = count.get(l) ?? 0;
+    if (n > 0) {
+      same += l.length + 1;
+      count.set(l, n - 1);
+    }
+  }
+  return (2 * same) / (a.length + b.length + 2);
+}
+
+export async function adoptOrphan(o: Orphan) {
+  await vscode.workspace.fs.createDirectory(parent(o.to));
+  await vscode.workspace.fs.rename(o.from, o.to, { overwrite: false });
 }

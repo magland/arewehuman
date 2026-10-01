@@ -6,6 +6,8 @@ export interface CharInfo {
   // Whether the character is a line break: known for inserts that list their
   // line breaks, undefined for those that do not.
   nl?: boolean;
+  // For source "k": the recording and character it came from.
+  from?: { ref: string; id: number };
   // Later deletions and restorations, in order: [t, "d" | "u" | "m"]
   hist: [number, "d" | "u" | "m"][];
 }
@@ -25,7 +27,7 @@ export function applyEvent(live: number[], chars: CharInfo[], ev: Ev, alive: Uin
       return typeof ev[2] === "string" && /^[0-9a-f]{40,64}$/.test(ev[2]) ? null : "malformed commit hash";
     case "i": {
       const [, t, pos, n, src, nl] = ev;
-      if (!SRCS.includes(src)) return `unknown source "${src}"`;
+      if (!SRCS.includes(src) || src === "k") return `unknown source "${src}"`;
       if (!(pos >= 0 && pos <= live.length) || !(n > 0)) return `insert out of range (pos ${pos}, n ${n}, length ${live.length})`;
       if (nl !== undefined && !(Array.isArray(nl) && nl.length && nl.every((k, j) => Number.isInteger(k) && k >= 0 && k < n && (j === 0 || k > nl[j - 1]))))
         return "malformed list of line breaks";
@@ -34,6 +36,26 @@ export function applyEvent(live: number[], chars: CharInfo[], ev: Ev, alive: Uin
       for (let k = 0; k < n; k++) {
         const id = chars.length;
         chars.push({ src, tIns: t, hist: [], nl: breaks ? breaks.has(k) : undefined });
+        alive[id] = true as never;
+        ids.push(id);
+      }
+      spliceIn(live, pos, ids);
+      return null;
+    }
+    case "k": {
+      const [, t, pos, ref, ranges, nl] = ev;
+      if (typeof ref !== "string" || !ref) return "malformed reference to another recording";
+      if (!(pos >= 0 && pos <= live.length)) return `insert out of range (pos ${pos}, length ${live.length})`;
+      const from = Array.isArray(ranges) ? decodeRanges(ranges) : [];
+      const n = from.length;
+      if (!n || !from.every((x) => Number.isInteger(x) && x >= 0)) return "malformed reference to another recording";
+      if (nl !== undefined && !(Array.isArray(nl) && nl.length && nl.every((k, j) => Number.isInteger(k) && k >= 0 && k < n && (j === 0 || k > nl[j - 1]))))
+        return "malformed list of line breaks";
+      const breaks = nl && new Set(nl);
+      const ids: number[] = [];
+      for (let k = 0; k < n; k++) {
+        const id = chars.length;
+        chars.push({ src: "k", tIns: t, hist: [], nl: breaks ? breaks.has(k) : undefined, from: { ref, id: from[k] } });
         alive[id] = true as never;
         ids.push(id);
       }
@@ -111,9 +133,10 @@ export function replay(doc: Pick<ProvDoc, "events" | "text">): ReplayResult {
 
 // Ids-only application of an event, for fast seeking. Assumes the log was validated by replay().
 function applyLive(st: { live: number[]; next: number }, ev: Ev) {
-  if (ev[0] === "i") {
+  if (ev[0] === "i" || ev[0] === "k") {
+    const n = ev[0] === "i" ? ev[3] : decodeRanges(ev[4]).length;
     const ids: number[] = [];
-    for (let j = 0; j < ev[3]; j++) ids.push(st.next++);
+    for (let j = 0; j < n; j++) ids.push(st.next++);
     spliceIn(st.live, ev[2], ids);
   } else if (ev[0] === "d") st.live.splice(ev[2], ev[3]);
   else if (ev[0] === "r") spliceIn(st.live, ev[2], decodeRanges(ev[4]));

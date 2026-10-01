@@ -9,8 +9,11 @@ interface Project {
   title: string;
   md: string | null;
   recs: NamedRecording[];
+  others: NamedRecording[];
   initial?: string;
 }
+
+type Raw = { name: string; log: string };
 
 // Shows one recording ("show"), or a file recorded in several workspaces ("project").
 export function ViewerApp() {
@@ -27,8 +30,16 @@ export function ViewerApp() {
           setA(await analyze(parseRecording(m.log), m.md));
           setProject(null);
         } else if (m?.type === "project") {
-          const recs = (m.recs as { name: string; log: string }[]).map((r) => ({ name: r.name, doc: parseRecording(r.log) }));
-          setProject({ title: m.title, md: m.md, recs, initial: m.initial });
+          const recs = (m.recs as Raw[]).map((r) => ({ name: r.name, doc: parseRecording(r.log) }));
+          // A recording of another file that cannot be read is left out.
+          const others = ((m.others ?? []) as Raw[]).flatMap((r) => {
+            try {
+              return [{ name: r.name, doc: parseRecording(r.log) }];
+            } catch {
+              return [];
+            }
+          });
+          setProject({ title: m.title, md: m.md, recs, others, initial: m.initial });
           setA(null);
         } else return;
         setLoads((n) => n + 1);
@@ -42,7 +53,8 @@ export function ViewerApp() {
     return () => window.removeEventListener("message", on);
   }, []);
 
-  if (project) return <ProjectView key={loads} title={project.title} md={project.md} recs={project.recs} initial={project.initial} />;
+  if (project)
+    return <ProjectView key={loads} title={project.title} md={project.md} recs={project.recs} others={project.others} initial={project.initial} />;
   if (!a) return <div className="viewer">{err ? <p className="error">{err}</p> : <p className="muted">Loading…</p>}</div>;
   return <ViewerBody a={a} err={err} replayKey={loads} />;
 }

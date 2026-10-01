@@ -17,7 +17,8 @@ export interface LogMark {
 }
 
 export function headerLine(doc: ProvDoc): string {
-  return JSON.stringify({ format: FORMAT, version: FORMAT_VERSION, app: doc.app, created: doc.created, t0: doc.t0 }) + "\n";
+  const head = { format: FORMAT, version: FORMAT_VERSION, ...(doc.id ? { id: doc.id } : {}), app: doc.app, created: doc.created, t0: doc.t0 };
+  return JSON.stringify(head) + "\n";
 }
 
 // The event and checkpoint lines after `from`. A checkpoint line follows the
@@ -83,6 +84,7 @@ export function parseLog(s: string): ParsedLog {
   const doc: ProvDoc = {
     format: FORMAT,
     version: FORMAT_VERSION,
+    ...(typeof head.id === "string" ? { id: head.id } : {}),
     app: head.app as ProvDoc["app"],
     title: str(fin.title) || "Untitled",
     created: str(head.created) || new Date(head.t0).toISOString(),
