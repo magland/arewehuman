@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { analyze, type Analysis } from "../../src/viewer/analyze";
 import { ViewerBody } from "../../src/viewer/ViewerPage";
-import { parseProvDoc } from "../../src/util";
+import { parseRecording } from "../../src/prov/log";
 import { vscode } from "./api";
 
 export function ViewerApp() {
@@ -14,7 +14,7 @@ export function ViewerApp() {
       const m = e.data;
       if (m?.type !== "show") return;
       try {
-        setA(await analyze(parseProvDoc(m.prov), m.md));
+        setA(await analyze(parseRecording(m.log), m.md));
         setLoads((n) => n + 1);
         setErr(null);
       } catch (x) {

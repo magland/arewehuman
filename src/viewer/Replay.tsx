@@ -113,7 +113,7 @@ export function Replay({ a }: { a: Analysis }) {
       const cls = [!known && "ghost", untyped && "untyped"].filter(Boolean).join(" ");
       let s = "";
       if (known) for (let m = i; m < j; m++) s += doc.text[tl.finalIndex[live[m]]];
-      else s = "░".repeat(j - i);
+      else for (let m = i; m < j; m++) s += res.chars[live[m]].nl ? "\n" : "░";
       parts.push(cls ? `<span class="${cls}">${escapeHtml(s)}</span>` : escapeHtml(s));
       i = j;
     }
@@ -176,7 +176,7 @@ export function Replay({ a }: { a: Analysis }) {
       <div className="replay-text" ref={textRef} />
       <p className="replay-note muted small">
         <span className="untyped">Highlighted</span> text was not typed. <span className="ghost">░░</span> marks text that was later deleted;
-        its content was never recorded. Long pauses are shortened.
+        its content was never recorded, apart from where its line breaks were. Long pauses are shortened.
       </p>
     </div>
   );

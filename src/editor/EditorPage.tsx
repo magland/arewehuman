@@ -4,7 +4,8 @@ import { createEditor, setSourceHighlight } from "./cm";
 import { Recorder } from "./recorder";
 import { LocalStorageClips } from "./clips";
 import { deleteDoc, lastDocId, listDocs, loadDoc, newId, saveDoc, setLastDocId, type DocMeta } from "../storage";
-import { exportDoc, exportMd, parseProvDoc } from "../util";
+import { exportDoc, exportMd } from "../util";
+import { isRecordingFile, parseRecording } from "../prov/log";
 import { renderMarkdown } from "../markdown";
 import { replay } from "../prov/replay";
 import { verifyChain } from "../prov/chain";
@@ -154,20 +155,20 @@ export function EditorPage() {
   const onFiles = async (files: FileList | null) => {
     if (!files || !files.length) return;
     const arr = Array.from(files);
-    const json = arr.find((f) => /\.json$/i.test(f.name));
-    const md = arr.find((f) => !/\.json$/i.test(f.name));
+    const json = arr.find((f) => isRecordingFile(f.name));
+    const md = arr.find((f) => !isRecordingFile(f.name));
     await save();
     discardIfEmpty();
     try {
       if (json) {
-        const doc = parseProvDoc(await json.text());
+        const doc = parseRecording(await json.text());
         const res = replay(doc);
         if (res.errors.length) throw new Error("its event log is invalid (" + res.errors[0] + ")");
         if (md && (await md.text()).replace(/\r\n?/g, "\n") !== doc.text)
-          alert("The .md file differs from the text stored in the provenance file. Using the provenance file's text.");
+          alert("The .md file differs from the text stored in the recording. Using the recording's text.");
         const chain = await verifyChain(doc);
         if (!chain.ok)
-          alert(`Warning: this provenance file does not verify (${chain.message}). You can keep editing, but it will not verify later either.`);
+          alert(`Warning: this recording does not verify (${chain.message}). You can keep editing, but it will not verify later either.`);
         const id = newId();
         const err = saveDoc(id, doc);
         if (err) throw new Error(err);
@@ -222,7 +223,7 @@ export function EditorPage() {
 
   return (
     <div className="editor-page" onClick={() => menu && setMenu(null)} {...dragProps}>
-      {dragging && <div className="drop-overlay">Drop a .prov.json (with or without its .md) or a .md file to import it</div>}
+      {dragging && <div className="drop-overlay">Drop a .md.awh.jsonl recording (with or without its .md) or a .md file to import it</div>}
       <div className="toolbar">
         <input
           className="title-input"
@@ -244,7 +245,7 @@ export function EditorPage() {
           >
             New
           </button>
-          <button onClick={() => fileInput.current?.click()} title="Open a .prov.json to keep editing it with its history, or a .md file as imported text">
+          <button onClick={() => fileInput.current?.click()} title="Open a .md.awh.jsonl recording to keep editing it with its history, or a .md file as imported text">
             Import
           </button>
           <div className="menu-wrap" onClick={(e) => e.stopPropagation()}>
@@ -293,8 +294,8 @@ export function EditorPage() {
             {menu === "export" && (
               <div className="menu" role="menu">
                 <button className="menu-item" onClick={async () => { setMenu(null); const d = await currentDoc(); if (d) exportDoc(d); }}>
-                  Provenance (.prov.json)
-                  <span className="muted small">Text plus full history. This is the file to share.</span>
+                  Recording (.md.awh.jsonl)
+                  <span className="muted small">Text plus full history. Share it next to the .md file.</span>
                 </button>
                 <button className="menu-item" onClick={async () => { setMenu(null); const d = await currentDoc(); if (d) exportMd(d); }}>
                   Markdown (.md)
@@ -314,7 +315,7 @@ export function EditorPage() {
           </button>
         </div>
       </div>
-      <input ref={fileInput} type="file" accept=".json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
+      <input ref={fileInput} type="file" accept=".jsonl,.json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
       <div className={"panes" + (previewOn ? " split" : "")}>
         <div className="editor-host" ref={host} />
         {previewOn && <div className="preview md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />}

@@ -16,13 +16,14 @@ export function AboutPage() {
       </p>
       <p>
         The values of deleted characters are never recorded. If you write a sentence and then erase it, the history shows that a passage of
-        that length existed at that place and time, but not what it said. Text that survives to the final version is known, because it is in
+        that length existed at that place and time, and how it was divided into lines, but not what it said. Text that survives to the final version is known, because it is in
         the final version. The same rule applies to browser storage: only the current text and the event log are saved.
       </p>
       <h2>Files</h2>
       <p>
-        Exporting gives two files: <code>name.md</code>, the document itself, and <code>name.prov.json</code>, which contains the same text
-        plus the full event log. The provenance file alone is enough to verify and replay the document. The <a href="#/view">Replay</a> page
+        Exporting gives two files: <code>name.md</code>, the document itself, and <code>name.md.awh.jsonl</code>, the recording, which holds
+        the event log, one event per line, followed by the same text. The recording alone is enough to verify and replay the document. The{" "}
+        <a href="#/view">Replay</a> page
         replays the log, checks that it reproduces the text exactly, checks the hash chain, and plays back the writing of the document at a
         choice of speeds.
       </p>
@@ -36,7 +37,7 @@ export function AboutPage() {
       </p>
       <p>
         Note also that keystroke timing is somewhat identifying: the rhythm of a person's typing can be used to recognize them. Share
-        provenance files with that in mind.
+        recordings with that in mind.
       </p>
       <p>
         Inspired by Dan Romik's <a href="https://blog.danromik.com/on-provably-writing-without-ai">ReelDocs</a>. Unlike ReelDocs, arewehuman

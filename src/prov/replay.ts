@@ -3,6 +3,9 @@ import { decodeRanges, SRCS, type Ev, type ProvDoc, type Src } from "./format";
 export interface CharInfo {
   src: Src;
   tIns: number;
+  // Whether the character is a line break: known for inserts that list their
+  // line breaks, undefined for those that do not.
+  nl?: boolean;
   // Later deletions and restorations, in order: [t, "d" | "u" | "m"]
   hist: [number, "d" | "u" | "m"][];
 }
@@ -19,13 +22,16 @@ export function applyEvent(live: number[], chars: CharInfo[], ev: Ev, alive: Uin
     case "s":
       return null;
     case "i": {
-      const [, t, pos, n, src] = ev;
+      const [, t, pos, n, src, nl] = ev;
       if (!SRCS.includes(src)) return `unknown source "${src}"`;
       if (!(pos >= 0 && pos <= live.length) || !(n > 0)) return `insert out of range (pos ${pos}, n ${n}, length ${live.length})`;
+      if (nl !== undefined && !(Array.isArray(nl) && nl.length && nl.every((k, j) => Number.isInteger(k) && k >= 0 && k < n && (j === 0 || k > nl[j - 1]))))
+        return "malformed list of line breaks";
+      const breaks = nl && new Set(nl);
       const ids: number[] = [];
       for (let k = 0; k < n; k++) {
         const id = chars.length;
-        chars.push({ src, tIns: t, hist: [] });
+        chars.push({ src, tIns: t, hist: [], nl: breaks ? breaks.has(k) : undefined });
         alive[id] = true as never;
         ids.push(id);
       }
@@ -94,6 +100,10 @@ export function replay(doc: Pick<ProvDoc, "events" | "text">): ReplayResult {
   });
   if (!errors.length && live.length !== doc.text.length)
     errors.push(`replay gives ${live.length} characters but the text has ${doc.text.length}`);
+  if (!errors.length) {
+    const bad = live.findIndex((id, i) => chars[id].nl !== undefined && chars[id].nl !== (doc.text[i] === "\n"));
+    if (bad >= 0) errors.push(`the line breaks listed in the log do not match the text (at offset ${bad})`);
+  }
   return { live, chars, errors };
 }
 

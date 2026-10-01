@@ -1,27 +1,33 @@
-# Provenance file format, version 1
+# Recording file format, version 2
 
-A provenance file (`*.prov.json`) is a JSON object holding the final text of a Markdown document and the complete log of edits that produced it. The log contains no character values; the value of a character is known only if it survives into the final text.
+A Markdown document `name.md` is recorded in `name.md.awh.jsonl` next to it. The recording holds the complete log of edits that produced the document, followed by its current text. The log contains no character values, except that it marks which characters are line breaks; the value of any other character is known only if it survives into the current text.
 
-## Top level
+The file is in JSON Lines format: one JSON value per line, each line ending in `\n`. It has three parts.
 
-```json
-{
-  "format": "arewehuman",
-  "version": 1,
-  "app": { "name": "arewehuman", "version": "0.1.0", "url": "https://github.com/magland/arewehuman" },
-  "title": "On keeping a lab notebook",
-  "created": "2026-09-29T10:00:00.000Z",
-  "t0": 1790676000000,
-  "text": "# On keeping a lab notebook\n\n...",
-  "textSha256": "…",
-  "events": [ ... ],
-  "chain": { "algorithm": "sha256", "checkpoints": [[312, "…"], [481, "…"]], "seal": "…" }
-}
+1. A header object on the first line.
+2. Events (arrays) and checkpoints (objects with a `checkpoint` field), in the order they were recorded. This part is only ever appended to.
+3. A final object holding the current text and the seal. It is replaced, not appended to, at every save, so the file never holds the text of an earlier state.
+
+```
+{"format":"arewehuman","version":2,"app":{"name":"arewehuman","version":"0.1.0","url":"https://github.com/magland/arewehuman"},"created":"2026-09-29T10:00:00.000Z","t0":1790676000000}
+["s",0]
+["i",1834,0,1,"t"]
+["i",1990,1,1,"t"]
+...
+{"checkpoint":"…"}
+["s",86400512]
+...
+{"checkpoint":"…"}
+{"title":"On keeping a lab notebook","text":"# On keeping a lab notebook\n\n...","textSha256":"…","seal":"…"}
 ```
 
-`text` is the recorded document. A tool that records a Markdown file with a leading YAML frontmatter block may leave that block out of `text`, as the VS Code extension does, since frontmatter is metadata rather than writing; `text` is then the file with its frontmatter (and the blank lines after it) removed.
+A recording tool saves by writing the new events and checkpoints where the old final line was, followed by the new final line. Everything before the old final line is left as it is, so the cost of a save grows with the size of the document rather than the length of its history. Because the final line includes the text, the recording alone is enough to verify and replay the document, and a recording tool can tell when the `.md` file was changed by another program, and record the difference. Note that a copy of the file kept from an earlier save, for example in version control, holds the text as it was at that save, as a copy of the `.md` file would.
+
+`text` is the recorded document. A tool that records a Markdown file with a leading YAML frontmatter block may leave that block out of `text`, as the VS Code extension does, since frontmatter is metadata rather than writing; `text` is then the file with its frontmatter (and the blank lines after it) removed. `title` is optional.
 
 `t0` is the start time in milliseconds since the Unix epoch, and `created` is the same instant in ISO form. Line breaks in `text` are `\n`. Positions and lengths count UTF-16 code units, as JavaScript strings do, so a character outside the Basic Multilingual Plane (for example most emoji) occupies two positions and two ids.
+
+Version 1 stored the same information as a single JSON object in `name.prov.json`, with the events in an `events` array, the checkpoints as `[end, hash]` pairs, and the text and seal at the top level. Since the hash chain is unchanged, a version 1 file converts to version 2 with the same hashes. The web app reads both versions.
 
 ## Events
 
@@ -32,9 +38,11 @@ Every inserted character receives an implicit id: the first inserted character i
 | event | form | meaning |
 |---|---|---|
 | session | `["s", t]` | a new editing session began (the document was opened) |
-| insert | `["i", t, pos, n, src]` | `n` new characters inserted at `pos`, with the next `n` ids |
+| insert | `["i", t, pos, n, src]` or `["i", t, pos, n, src, breaks]` | `n` new characters inserted at `pos`, with the next `n` ids |
 | delete | `["d", t, pos, n]` | the `n` characters at `pos` were deleted |
 | restore | `["r", t, pos, kind, ranges]` | previously deleted characters reinserted at `pos` |
+
+`breaks` lists the line breaks among the inserted characters, as increasing offsets from the start of the insert, so `["i", 5000, 12, 4, "p", [1, 3]]` inserts `?\n?\n`. It is left out when there are none. A replay can then keep the line structure of text that was later deleted, which matters most for code. The cost is that the record shows how a deleted passage was divided into lines, though not what it said. Recordings made before 2026-10-01 have no `breaks`, so in those the line breaks of deleted text are unknown.
 
 `src` is one of `t` (typed), `p` (pasted from outside the document), `c` (copied from within the document), `x` (imported), `o` (other). A character's source never changes.
 
@@ -44,7 +52,7 @@ A single editor transaction may produce several events with the same `t`. Within
 
 ## Copy and paste
 
-This section describes editor behavior; it does not affect the file format. When text is copied or cut, a recording editor puts two things on the clipboard: the plain text, which any application can paste, and a JSON object `{"arewehuman": 1, "nonce": "…"}` under the type `application/x-arewehuman`, which other applications ignore. The nonce is random. The editor keeps a registry, outside the provenance file, that maps each recent nonce to the document and the ids of the copied characters. The registry holds no text, so cut text is not stored.
+This section describes editor behavior; it does not affect the file format. When text is copied or cut, a recording editor puts two things on the clipboard: the plain text, which any application can paste, and a JSON object `{"arewehuman": 1, "nonce": "…"}` under the type `application/x-arewehuman`, which other applications ignore. The nonce is random. The editor keeps a registry, outside the recording, that maps each recent nonce to the document and the ids of the copied characters. The registry holds no text, so cut text is not stored.
 
 On paste, the editor looks the nonce up in its registry rather than trusting the clipboard, since any program can write to the clipboard. Characters cut from the same document that are still deleted are restored with their original ids (a restore of kind `m`), including in a later session, provided the pasted text lines up one to one with them. Any other paste from the same document is a copy (`c`). A paste from another document, or with a nonce the registry does not know, is an ordinary paste (`p`): the history of text written elsewhere is not part of this document's log, so a replay could not show how it was written. Without any nonce, the editor falls back to comparing the pasted text with the last copy made in the current session.
 
@@ -62,7 +70,7 @@ hk = sha256(h(k-1) + "\n" + JSON.stringify(events[start_k .. end_k)))
 seal = sha256(h_last + "\n" + textSha256)
 ```
 
-`checkpoints[k] = [end_k, hk]`, where `start_k` is the previous checkpoint's end (0 for the first), and the last checkpoint ends at `events.length`. Hashes are lowercase hex. `JSON.stringify` is the standard JavaScript serialization with no whitespace; event arrays contain only strings and integers, so it is unambiguous. The editor adds a checkpoint at each autosave.
+Here `events[start_k .. end_k)` are the events between checkpoint line `k - 1` (or the header, for the first) and checkpoint line `k`, whose `checkpoint` field is `hk`. The last checkpoint line must come after the last event. Hashes are lowercase hex. `JSON.stringify` is the standard JavaScript serialization with no whitespace; event arrays contain only strings and integers, so it is unambiguous, and it equals `"[" + lines.join(",") + "]"` for the event lines as written. The editor adds a checkpoint at each save (in the web app, each autosave). The string `arewehuman/v1` in `h0` is kept from version 1, so that the chain is the same in both versions.
 
 We emphasize that the chain alone does not make a file hard to forge, since anyone can recompute it. Its purpose is to detect later modification of a file and to provide the value that a timestamping service would sign.
 
@@ -70,9 +78,9 @@ We emphasize that the chain alone does not make a file hard to forge, since anyo
 
 A file is consistent if
 
-1. every event is well formed and times do not decrease,
+1. the header comes first and the final object last, every other line is an event or a checkpoint, every event is well formed, and times do not decrease,
 2. replaying the log never deletes or restores out of range, and never restores a character that is not deleted,
-3. the replay ends with exactly `text.length` characters,
+3. the replay ends with exactly `text.length` characters, and every surviving character from an insert with `breaks` is a line break exactly when `breaks` lists it,
 4. `textSha256` is the SHA-256 of `text`, and the chain and seal recompute as above,
 5. if a `.md` file accompanies it, that file's text (after normalizing line breaks) equals `text`.
 

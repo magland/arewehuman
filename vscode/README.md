@@ -1,10 +1,10 @@
 # arewehuman for VS Code (prototype)
 
-An experiment in recording provenance while writing Markdown in VS Code. It reuses the web app's recorder, file format and viewer (`../src`), so a `.prov.json` written here verifies in the web app and the other way round.
+An experiment in recording provenance while writing Markdown in VS Code. It reuses the web app's recorder, file format and viewer (`../src`), so a recording written here verifies in the web app and the other way round.
 
 ## How it works
 
-Recording happens in VS Code's own text editor, so keybindings, themes and most other extensions work as usual. Every `.md` file that has a `.prov.json` next to it is recorded while it is open, in whichever editor it is edited. When the `.md` file is saved, `name.prov.json` is written next to it.
+Recording happens in VS Code's own text editor, so keybindings, themes and most other extensions work as usual. Every `.md` file that has a `.md.awh.jsonl` next to it is recorded while it is open, in whichever editor it is edited. When `name.md` is saved, the recording `name.md.awh.jsonl` next to it is brought up to date: the new events are appended and the final line, which holds the current text, is replaced (see `../SPEC.md`). The whole file is rewritten only if it was changed by something else since the extension last wrote it.
 
 The extension API does not say whether a change came from a keystroke, a paste, an autocompletion or another extension, so the extension infers it as follows.
 
@@ -21,7 +21,7 @@ Only one extension can take over the `type` command. If another one has it (for 
 - A leading YAML frontmatter block (between `---` lines) is metadata rather than writing, so it is not recorded. The recorded text is the rest of the file, with `\n` line breaks. A site that checks a post against its recording should therefore compare the text after the frontmatter.
 - Changes made while the extension was not running are recorded as "other" the next time the file is opened.
 - Edits since the last save are kept in the extension's storage (never deleted text), so that they survive a restart.
-- A `.prov.json` file opens in the replay viewer. "Show Replay" in the editor title bar, or a click on the status bar item, shows the current recording, including unsaved edits.
+- A `.md.awh.jsonl` file opens in the replay viewer. "Show Replay" in the editor title bar, or a click on the status bar item, shows the current recording, including unsaved edits.
 
 ## Trying it
 
@@ -37,6 +37,6 @@ Then open this folder in VS Code and press F5, or run `code --extensionDevelopme
 - While a file is being recorded, every character typed in any VS Code editor passes through the extension, which adds a small delay when the extension host is busy. Vim emulators and other extensions that take over `type` cannot be used at the same time, except in the weaker mode described above.
 - Tab (indentation) and edits made by other commands, such as "Copy Line Down", are recorded as "other".
 - A cut is recognized as a move when pasted back into the same file within the same VS Code window. After a restart, or from another window, it is recorded as pasted.
-- Renaming or moving the `.md` file does not move its `.prov.json`.
+- Renaming or moving the `.md` file does not move its `.md.awh.jsonl`. Older `.prov.json` recordings are not picked up; convert one by importing it into the web app and exporting it again.
 - Editing the same file in two VS Code windows at once produces two conflicting recordings.
 - Recording in VS Code is no harder to forge than recording in the browser. The limitations in the main README apply unchanged.

@@ -1,4 +1,5 @@
-import { FORMAT, type ProvDoc } from "./prov/format";
+import type { ProvDoc } from "./prov/format";
+import { logName, serializeLog } from "./prov/log";
 
 export function download(filename: string, content: string, type = "text/plain") {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -36,24 +37,8 @@ export function fmtClock(epochMs: number) {
   });
 }
 
-export function parseProvDoc(s: string): ProvDoc {
-  let d: unknown;
-  try {
-    d = JSON.parse(s);
-  } catch {
-    throw new Error("Not valid JSON");
-  }
-  const doc = d as ProvDoc;
-  if (!doc || doc.format !== FORMAT) throw new Error("Not an arewehuman provenance file");
-  if (typeof doc.text !== "string" || !Array.isArray(doc.events) || typeof doc.t0 !== "number")
-    throw new Error("Provenance file is missing required fields");
-  if (!doc.chain || !Array.isArray(doc.chain.checkpoints)) doc.chain = { algorithm: "sha256", checkpoints: [], seal: "" };
-  return doc;
-}
-
 export function exportDoc(doc: ProvDoc) {
-  const base = slug(doc.title);
-  download(`${base}.prov.json`, JSON.stringify(doc), "application/json");
+  download(logName(`${slug(doc.title)}.md`), serializeLog(doc), "application/jsonl");
 }
 
 export function exportMd(doc: ProvDoc) {

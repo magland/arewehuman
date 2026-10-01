@@ -1,10 +1,11 @@
 import * as vscode from "vscode";
+import { promises as fs } from "fs";
 import { Recorder, type Cause } from "../../src/editor/recorder";
 import { CLIP_MIME, clipPayload, MemoryClips, parseClipPayload } from "../../src/editor/clips";
 import { SRC_LABEL, type ProvDoc, type Src } from "../../src/prov/format";
-import { parseProvDoc } from "../../src/util";
+import { bodyLines, finalLine, LOG_SUFFIX, parseLog, parseRecording, serializeLog } from "../../src/prov/log";
 import { sha256 } from "../../src/prov/chain";
-import { bodyOf, Session } from "./session";
+import { bodyOf, Session, type OnDisk } from "./session";
 import { Typing } from "./typing";
 
 const VIEWER = "arewehuman.viewer";
@@ -14,8 +15,8 @@ const MD: vscode.DocumentSelector = [
 ];
 
 const isMd = (u: vscode.Uri) => /\.md$/i.test(u.path);
-const provUri = (md: vscode.Uri) => md.with({ path: md.path.replace(/\.md$/i, "") + ".prov.json" });
-const mdUri = (prov: vscode.Uri) => prov.with({ path: prov.path.replace(/\.prov\.json$/i, "") + ".md" });
+const logUri = (md: vscode.Uri) => md.with({ path: md.path + LOG_SUFFIX });
+const mdUri = (log: vscode.Uri) => log.with({ path: log.path.slice(0, -LOG_SUFFIX.length) });
 const baseName = (u: vscode.Uri) => u.path.split("/").pop()!;
 const recordable = (d: vscode.TextDocument) => (d.uri.scheme === "file" || d.uri.scheme === "vscode-remote") && isMd(d.uri);
 
@@ -36,7 +37,7 @@ async function readText(u: vscode.Uri): Promise<string | null> {
   }
 }
 
-// Every open .md file with a .prov.json next to it is recorded, in whatever
+// Every open .md file with a .md.awh.jsonl next to it is recorded, in whatever
 // text editor it is edited.
 const sessions = new Map<string, Session>();
 const loading = new Map<string, Promise<Session | null>>();
@@ -72,7 +73,7 @@ function causeOf(e: vscode.TextDocumentChangeEvent): { cause: Cause; nonce?: str
 }
 
 // Edits made since the last save are kept in extension storage, so that they
-// survive a restart (VS Code restores unsaved files). Like the provenance file,
+// survive a restart (VS Code restores unsaved files). Like the recording file,
 // this never contains deleted text.
 let storageDir: vscode.Uri;
 const unsavedUri = async (doc: vscode.TextDocument) => vscode.Uri.joinPath(storageDir, (await sha256(doc.uri.toString())) + ".json");
@@ -87,7 +88,7 @@ function persist(s: Session) {
     await persisting.get(key);
     try {
       await vscode.workspace.fs.createDirectory(storageDir);
-      await vscode.workspace.fs.writeFile(await unsavedUri(s.document), new TextEncoder().encode(JSON.stringify(await s.toDoc())));
+      await vscode.workspace.fs.writeFile(await unsavedUri(s.document), new TextEncoder().encode(serializeLog(await s.toDoc())));
     } catch {
       /* only unsaved edits are at stake */
     }
@@ -99,23 +100,65 @@ function persist(s: Session) {
 async function loadUnsaved(doc: vscode.TextDocument): Promise<ProvDoc | null> {
   const t = await readText(await unsavedUri(doc));
   try {
-    return t ? parseProvDoc(t) : null;
+    return t ? parseRecording(t) : null;
   } catch {
     return null;
   }
 }
 
-async function writeProv(s: Session) {
+// The size in bytes of a recording file up to its final line, if the file ends
+// with `final` as written.
+function onDisk(content: string, mark: { events: number; checkpoints: number }, final: string): OnDisk | null {
+  if (!content.endsWith(final)) return null;
+  return { ...mark, head: Buffer.byteLength(content) - Buffer.byteLength(final), final };
+}
+
+// Writes the recording file. Usually this appends the new events and
+// checkpoints in place of the old final line, and then the new final line; the
+// whole file is written only if it is not as this session last left it.
+async function writeLog(s: Session) {
   const doc = await s.toDoc();
   if (doc.text !== bodyOf(s.document.getText()))
-    vscode.window.showWarningMessage("arewehuman: the recorded text differs from the document being saved; the provenance file may not match.");
-  await vscode.workspace.fs.writeFile(provUri(s.document.uri), new TextEncoder().encode(JSON.stringify(doc)));
+    vscode.window.showWarningMessage("arewehuman: the recorded text differs from the document being saved; the recording may not match.");
+  const uri = logUri(s.document.uri);
+  const mark = { events: doc.events.length, checkpoints: doc.chain.checkpoints.length };
+  const final = finalLine(doc);
+  const d = s.disk;
+  s.disk = null;
+  let done = false;
+  if (d && uri.scheme === "file") {
+    try {
+      const fh = await fs.open(uri.fsPath, "r+");
+      try {
+        const old = Buffer.from(d.final);
+        const cur = Buffer.alloc(old.length);
+        const { size } = await fh.stat();
+        if (size === d.head + old.length && (await fh.read(cur, 0, old.length, d.head)).bytesRead === old.length && cur.equals(old)) {
+          const add = Buffer.from(bodyLines(doc, d));
+          const buf = Buffer.concat([add, Buffer.from(final)]);
+          await fh.write(buf, 0, buf.length, d.head);
+          await fh.truncate(d.head + buf.length);
+          s.disk = { ...mark, head: d.head + add.length, final };
+          done = true;
+        }
+      } finally {
+        await fh.close();
+      }
+    } catch {
+      /* write the whole file instead */
+    }
+  }
+  if (!done) {
+    const all = serializeLog(doc);
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(all));
+    s.disk = onDisk(all, mark, final);
+  }
   clearTimeout(persistTimers.get(s));
   persistTimers.delete(s);
   await vscode.workspace.fs.delete(await unsavedUri(s.document)).then(undefined, () => {});
 }
 
-// Starts recording `doc` if it has a provenance file, or, with `create`, starts
+// Starts recording `doc` if it has a recording file, or, with `create`, starts
 // a new recording in which the current text is imported.
 function start(doc: vscode.TextDocument, create = false): Promise<Session | null> {
   const key = doc.uri.toString();
@@ -131,18 +174,21 @@ function start(doc: vscode.TextDocument, create = false): Promise<Session | null
 async function load(doc: vscode.TextDocument, create: boolean): Promise<Session | null> {
   const key = doc.uri.toString();
   await persisting.get(key); // the document may have just been closed and reopened
-  const provText = await readText(provUri(doc.uri));
-  if (provText === null && !create) return null;
+  const logText = await readText(logUri(doc.uri));
+  if (logText === null && !create) return null;
   let side: ProvDoc | null = null;
+  let disk: OnDisk | null = null;
   let err: string | null = null;
-  if (provText !== null) {
+  if (logText !== null) {
     try {
-      side = parseProvDoc(provText);
+      const p = parseLog(logText);
+      side = p.doc;
+      disk = onDisk(logText, p.mark, p.final);
     } catch (e) {
       err = (e as Error).message;
     }
   }
-  // Prefer the stored unsaved edits when they extend the provenance file, and
+  // Prefer the stored unsaved edits when they extend the recording file, and
   // whichever recording matches the document as it is now.
   const saved = side && (await loadUnsaved(doc));
   const body = bodyOf(doc.getText());
@@ -154,14 +200,16 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   for (const d of candidates) {
     try {
       session = new Session(doc, Recorder.resume(d, Date.now()), d.text);
+      // Appending is safe only if the session continues the file's own events.
+      if (d === side) session.disk = disk;
       break;
     } catch (e) {
       err = (e as Error).message;
     }
   }
-  if (!session && provText !== null) {
+  if (!session && logText !== null) {
     const choice = await vscode.window.showErrorMessage(
-      `arewehuman: the provenance file next to ${baseName(doc.uri)} cannot be resumed (${err ?? "unknown error"}). Edits to it are not being recorded.`,
+      `arewehuman: the recording next to ${baseName(doc.uri)} cannot be resumed (${err ?? "unknown error"}). Edits to it are not being recorded.`,
       "Start a New Recording",
     );
     if (choice !== "Start a New Recording" || doc.isClosed) return null;
@@ -175,7 +223,7 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   session.rec.docKey = key;
   sessions.set(key, session);
   typing.enable();
-  if (create) await writeProv(session);
+  if (create) await writeLog(session);
   else if (session.outsideChange) {
     const { del, ins } = session.outsideChange;
     vscode.window.showInformationMessage(
@@ -240,7 +288,7 @@ function update() {
   const pct = (n: number) => (total ? Math.round((100 * n) / total) : 0);
   status.text = `$(record) Recording · typed ${pct(counts.t)}%`;
   const md = new vscode.MarkdownString();
-  md.appendMarkdown(`**Recording ${baseName(s.document.uri)}.** The provenance file is written when you save.\n\n`);
+  md.appendMarkdown(`**Recording ${baseName(s.document.uri)}.** The recording is written when you save.\n\n`);
   md.appendMarkdown(`${total.toLocaleString()} characters: ` + (["t", "p", "c", "x", "o"] as Src[]).filter((k) => counts[k]).map((k) => `${SRC_LABEL[k]} ${pct(counts[k])}%`).join(", ") + "\n\n");
   if (!typing.owned)
     md.appendMarkdown("Another extension (such as a Vim emulator) handles typing, so typed text is recognized only approximately: any single character inserted in the focused editor counts as typed.\n\n");
@@ -249,7 +297,7 @@ function update() {
   status.show();
 }
 
-// The replay viewer, a webview. Renders a .prov.json file, or, for "Show Replay",
+// The replay viewer, a webview. Renders a .md.awh.jsonl file, or, for "Show Replay",
 // a recording in progress.
 function webviewHtml(webview: vscode.Webview, extUri: vscode.Uri) {
   const js = webview.asWebviewUri(vscode.Uri.joinPath(extUri, "dist", "webview.js"));
@@ -276,7 +324,7 @@ class ViewerProvider implements vscode.CustomTextEditorProvider {
   resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel) {
     const send = async () => {
       const md = await readText(mdUri(document.uri));
-      panel.webview.postMessage({ type: "show", prov: document.getText(), md: md === null ? null : bodyOf(md) });
+      panel.webview.postMessage({ type: "show", log: document.getText(), md: md === null ? null : bodyOf(md) });
     };
     setupViewer(this.ctx, panel, send);
     const sub = vscode.workspace.onDidChangeTextDocument((e) => {
@@ -327,10 +375,10 @@ export function activate(ctx: vscode.ExtensionContext) {
       persistTimers.set(s, setTimeout(() => void persist(s), 1000));
       refresh();
     }),
-    // The provenance file is written just before the .md is saved, so the two match.
+    // The recording is written just before the .md is saved, so the two match.
     vscode.workspace.onWillSaveTextDocument((e) => {
       const s = sessions.get(e.document.uri.toString());
-      if (s) e.waitUntil(writeProv(s));
+      if (s) e.waitUntil(writeLog(s));
     }),
   );
   for (const d of vscode.workspace.textDocuments) if (recordable(d)) void start(d);
@@ -388,7 +436,7 @@ export function activate(ctx: vscode.ExtensionContext) {
       const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, { preview: false });
       if (sessions.has(uri.toString())) return;
-      await start(doc, !(await exists(provUri(uri))));
+      await start(doc, !(await exists(logUri(uri))));
     }),
 
     vscode.commands.registerCommand("arewehuman.newDocument", async (arg?: unknown) => {
@@ -418,7 +466,7 @@ export function activate(ctx: vscode.ExtensionContext) {
       const panel = vscode.window.createWebviewPanel(VIEWER, `Replay: ${baseName(s.document.uri)}`, vscode.ViewColumn.Beside, {
         retainContextWhenHidden: true,
       });
-      setupViewer(ctx, panel, () => panel.webview.postMessage({ type: "show", prov: JSON.stringify(doc), md: null }));
+      setupViewer(ctx, panel, () => panel.webview.postMessage({ type: "show", log: serializeLog(doc), md: null }));
     }),
 
     vscode.commands.registerCommand("arewehuman.toggleHighlight", async () => {

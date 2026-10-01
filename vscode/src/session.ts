@@ -41,6 +41,15 @@ function isMove(changes: Change[]) {
   return removed.length > 0 && sorted(removed) === sorted(changes.map((c) => c.text).join(""));
 }
 
+// How far the recording file is known to be written: the events and
+// checkpoints in it, the size in bytes before its final line, and that line.
+export interface OnDisk {
+  events: number;
+  checkpoints: number;
+  head: number;
+  final: string;
+}
+
 // Records one Markdown document open in VS Code. The document is edited in VS
 // Code's own editor; every change event is passed to the recorder.
 export class Session {
@@ -49,6 +58,8 @@ export class Session {
   readonly outsideChange: { del: number; ins: number } | null;
   // The state before the last edit, if that edit only deleted text (see captureCopy).
   private lastDeletion: { text: string; live: number[]; spans: string } | null = null;
+  // The recording file, as this session last wrote or read it; null if unknown.
+  disk: OnDisk | null = null;
 
   // `recorded` is the text the recorder currently holds. If the document
   // differs from it, the difference is recorded as "other".

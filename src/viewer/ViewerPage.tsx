@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ProvDoc } from "../prov/format";
 import { loadDoc } from "../storage";
-import { fmtClock, parseProvDoc } from "../util";
+import { fmtClock } from "../util";
+import { isRecordingFile, parseRecording } from "../prov/log";
 import { analyze, type Analysis } from "./analyze";
 import { Replay } from "./Replay";
 
@@ -33,7 +34,7 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.text();
         })
-        .then((s) => load(parseProvDoc(s), null))
+        .then((s) => load(parseRecording(s), null))
         .catch((e) => setErr(`Could not load ${url}: ${(e as Error).message}`))
         .finally(() => setBusy(false));
     }
@@ -42,14 +43,14 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
   const onFiles = async (files: FileList | null) => {
     if (!files?.length) return;
     const arr = Array.from(files);
-    const json = arr.find((f) => /\.json$/i.test(f.name));
-    const md = arr.find((f) => !/\.json$/i.test(f.name));
+    const json = arr.find((f) => isRecordingFile(f.name));
+    const md = arr.find((f) => !isRecordingFile(f.name));
     if (!json) {
-      setErr("Choose a .prov.json file (optionally together with its .md file).");
+      setErr("Choose a .md.awh.jsonl recording (optionally together with its .md file).");
       return;
     }
     try {
-      await load(parseProvDoc(await json.text()), md ? await md.text() : null);
+      await load(parseRecording(await json.text()), md ? await md.text() : null);
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -74,17 +75,17 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
         <div className={"dropzone" + (drag ? " drag" : "")}>
           <h2>Replay a document</h2>
           <p>
-            Drop a <code>.prov.json</code> file here, optionally together with its <code>.md</code> file, or choose one. Watch it being written, keystroke by
+            Drop a <code>.md.awh.jsonl</code> recording here, optionally together with its <code>.md</code> file, or choose one. Watch it being written, keystroke by
             keystroke. Everything runs in your browser; nothing is uploaded.
           </p>
           <label className="button primary">
             Choose files
-            <input type="file" accept=".json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
+            <input type="file" accept=".jsonl,.json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
           </label>
           {busy && <p className="muted">Loading…</p>}
           {err && <p className="error">{err}</p>}
           <p className="muted small">
-            To share a replay link, host the <code>.prov.json</code> file somewhere that allows cross-origin requests (for example a GitHub gist, raw
+            To share a replay link, host the <code>.md.awh.jsonl</code> file somewhere that allows cross-origin requests (for example a GitHub gist, raw
             URL) and link to <code>{location.origin + location.pathname}#/view?url=…</code>
           </p>
         </div>
@@ -100,7 +101,7 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
         headerAction={
           <label className="button">
             Open another…
-            <input type="file" accept=".json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
+            <input type="file" accept=".jsonl,.json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
           </label>
         }
       />

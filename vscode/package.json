@@ -16,7 +16,7 @@
       {
         "viewType": "arewehuman.viewer",
         "displayName": "arewehuman replay",
-        "selector": [{ "filenamePattern": "*.prov.json" }],
+        "selector": [{ "filenamePattern": "*.md.awh.jsonl" }],
         "priority": "default"
       }
     ],
@@ -57,6 +57,7 @@
     "package": "npm run build && npx @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@types/node": "^20.19.43",
     "@types/vscode": "~1.97.0",
     "esbuild": "^0.28.2"
   }

@@ -1,6 +1,6 @@
 import type { EditorState, Transaction } from "@codemirror/state";
 import { genesis, nextHash, sealHash, sha256 } from "../prov/chain";
-import { APP, decodeRanges, encodeRanges, FORMAT, FORMAT_VERSION, randomId, type Ev, type ProvDoc, type RestoreKind, type Src } from "../prov/format";
+import { APP, decodeRanges, encodeRanges, FORMAT, FORMAT_VERSION, insertEv, randomId, type Ev, type ProvDoc, type RestoreKind, type Src } from "../prov/format";
 import { replay, spliceIn } from "../prov/replay";
 import { MemoryClips, type ClipRegistry } from "./clips";
 
@@ -64,7 +64,7 @@ export class Recorder {
   readonly t0: number;
   // Identifies this document to the clip registry, so that a cut is restored
   // only in the document it came from. Set by the host (a storage key or file
-  // URI) so that it lasts across sessions; not written to the provenance file.
+  // URI) so that it lasts across sessions; not written to the recording.
   docKey = randomId();
   clips: ClipRegistry = defaultClips;
   live: number[]; // ids aligned with the document
@@ -96,7 +96,7 @@ export class Recorder {
 
   static fresh(t0: number, imported = ""): Recorder {
     const events: Ev[] = [["s", 0]];
-    if (imported.length) events.push(["i", 0, 0, imported.length, "x"]);
+    if (imported.length) events.push(insertEv(0, 0, imported, "x"));
     return new Recorder(t0, events, null);
   }
 
@@ -170,7 +170,7 @@ export class Recorder {
             this.alive.push(false);
             run.push(id);
           }
-          this.events.push(["i", t, pos, n, src]);
+          this.events.push(insertEv(t, pos, c.text.slice(i, j), src));
           this.insertIds(pos, run);
         }
         pos += j - i;

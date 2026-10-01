@@ -10,7 +10,7 @@
     "skipLibCheck": true,
     "noUnusedLocals": true,
     "isolatedModules": true,
-    "types": ["vscode"]
+    "types": ["vscode", "node"]
   },
   "include": ["src", "webview"]
 }

@@ -1,7 +1,8 @@
-// Provenance file format (see SPEC.md).
+// Recording format (see SPEC.md). A recording is stored as name.md.awh.jsonl
+// next to name.md (see log.ts); ProvDoc is its contents, held in memory.
 
 export const FORMAT = "arewehuman";
-export const FORMAT_VERSION = 1;
+export const FORMAT_VERSION = 2;
 
 // Source of a character, fixed when the character is first created.
 //  t: typed       p: pasted (from outside the document)   c: copied from within the document
@@ -24,7 +25,11 @@ export type RestoreKind = "u" | "m";
 // live document at the moment the event is applied. Character ids are implicit:
 // each inserted character gets the next integer, starting at 0.
 export type SessionEv = ["s", number];
-export type InsertEv = ["i", number, number, number, Src]; // t, pos, count, src
+// An insert lists where its line breaks are, as offsets into the inserted
+// text, so that a replay keeps the line structure of text deleted later. The
+// list is left out when there are none. (Recordings made before 2026-10-01 have
+// no lists, so the line breaks in their deleted text are unknown.)
+export type InsertEv = ["i", number, number, number, Src] | ["i", number, number, number, Src, number[]]; // t, pos, count, src, line breaks
 export type DeleteEv = ["d", number, number, number]; // t, pos, count
 export type RestoreEv = ["r", number, number, RestoreKind, number[]]; // t, pos, kind, id ranges [start, len, start, len, ...]
 export type Ev = SessionEv | InsertEv | DeleteEv | RestoreEv;
@@ -51,6 +56,12 @@ export const APP = {
   version: "0.1.0",
   url: "https://github.com/magland/arewehuman",
 };
+
+export function insertEv(t: number, pos: number, text: string, src: Src): InsertEv {
+  const nl: number[] = [];
+  for (let k = text.indexOf("\n"); k >= 0; k = text.indexOf("\n", k + 1)) nl.push(k);
+  return nl.length ? ["i", t, pos, text.length, src, nl] : ["i", t, pos, text.length, src];
+}
 
 export function encodeRanges(ids: number[]): number[] {
   const out: number[] = [];

@@ -29,7 +29,7 @@ export async function analyze(doc: ProvDoc, md: string | null): Promise<Analysis
   checks.push({ ok: chain.ok, label: chain.ok ? "Hash chain intact" : "Hash chain broken", detail: chain.ok ? undefined : chain.message });
   if (md !== null) {
     const same = md.replace(/\r\n?/g, "\n") === doc.text;
-    checks.push({ ok: same, label: same ? "Markdown file matches" : "Markdown file differs from the text in the provenance file" });
+    checks.push({ ok: same, label: same ? "Markdown file matches" : "Markdown file differs from the text in the recording" });
   }
   const tEnd = doc.t0 + (doc.events.length ? doc.events[doc.events.length - 1][1] : 0);
   if (tEnd > Date.now() + 5 * 60_000) checks.push({ ok: false, label: "Timestamps are in the future" });
