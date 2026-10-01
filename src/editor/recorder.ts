@@ -1,4 +1,4 @@
-import { Transaction, type EditorState } from "@codemirror/state";
+import type { EditorState, Transaction } from "@codemirror/state";
 import { genesis, nextHash, sealHash, sha256 } from "../prov/chain";
 import { APP, decodeRanges, encodeRanges, FORMAT, FORMAT_VERSION, randomId, type Ev, type ProvDoc, type RestoreKind, type Src } from "../prov/format";
 import { replay, spliceIn } from "../prov/replay";
@@ -26,11 +26,32 @@ export interface Clip {
   nonce: string; // identifies this copy on the clipboard
 }
 
-interface Change {
+// How an edit came about, as far as the editor can tell. A paste may also
+// carry the nonce found on the clipboard (see Hints.pasteNonce).
+export type Cause = "typed" | "paste" | "drop" | "copyline" | "undo" | "move" | "other";
+
+// One replaced span. `fromA`/`toA` refer to the document before the edit,
+// `fromB` to the document once earlier changes of the same edit are applied.
+// `removed` is the old text in [fromA, toA). Changes are in document order and
+// do not overlap.
+export interface Change {
   fromA: number;
   toA: number;
   fromB: number;
   text: string;
+  removed: string;
+}
+
+// The cause of a CodeMirror transaction, from its user event and the hints.
+export function causeOf(tr: Transaction, hints: Hints): Cause {
+  if (tr.isUserEvent("undo") || tr.isUserEvent("redo")) return "undo";
+  if (tr.isUserEvent("move")) return "move";
+  if (tr.isUserEvent("input.paste")) return "paste";
+  if (tr.isUserEvent("input.drop")) return "drop";
+  if (tr.isUserEvent("input.copyline")) return "copyline";
+  if (tr.isUserEvent("input.complete")) return "other";
+  if (tr.isUserEvent("input") || tr.isUserEvent("indent")) return hints.typedOk && !hints.replacement ? "typed" : "other";
+  return "other";
 }
 
 // Records every edit of a CodeMirror document as provenance events.
@@ -93,12 +114,23 @@ export class Recorder {
     return this.src.length;
   }
 
+  // Records a CodeMirror transaction.
   apply(tr: Transaction, t: number, hints: Hints) {
     if (!tr.docChanged) return;
-    t = Math.max(t, lastTime(this.events));
     const oldDoc = tr.startState.doc;
     const changes: Change[] = [];
-    tr.changes.iterChanges((fromA, toA, fromB, _toB, ins) => changes.push({ fromA, toA, fromB, text: ins.toString() }));
+    tr.changes.iterChanges((fromA, toA, fromB, _toB, ins) =>
+      changes.push({ fromA, toA, fromB, text: ins.toString(), removed: oldDoc.sliceString(fromA, toA) }),
+    );
+    this.applyChanges(changes, t, causeOf(tr, hints), hints.pasteNonce);
+  }
+
+  // Records one edit, given as a list of changes (see Change). For a paste,
+  // `pasteNonce` is the nonce found on the clipboard, null if it had none, or
+  // undefined if the clipboard was not seen.
+  applyChanges(changes: Change[], t: number, cause: Cause, pasteNonce?: string | null) {
+    if (!changes.some((c) => c.text.length || c.toA > c.fromA)) return;
+    t = Math.max(t, lastTime(this.events));
 
     // Deletions first, last to first, so positions refer to the old document.
     const pool: { id: number; ch: string; used?: boolean }[] = [];
@@ -107,7 +139,7 @@ export class Recorder {
       const n = c.toA - c.fromA;
       if (!n) continue;
       const ids = this.live.splice(c.fromA, n);
-      const txt = oldDoc.sliceString(c.fromA, c.toA);
+      const txt = c.removed;
       ids.forEach((id, j) => {
         this.alive[id] = false;
         this.mem.set(id, { ch: txt[j], n: ++this.nDeleted });
@@ -119,7 +151,7 @@ export class Recorder {
     // Then insertions, first to last; fromB is the position once earlier ones are in.
     for (const c of changes) {
       if (!c.text.length) continue;
-      const { ids, src, kind } = this.classify(tr, c, pool, hints);
+      const { ids, src, kind } = this.classify(cause, c, pool, pasteNonce);
       let pos = c.fromB;
       for (let i = 0; i < ids.length; ) {
         let j = i + 1;
@@ -148,13 +180,13 @@ export class Recorder {
   }
 
   // Decides, for each inserted character, whether it restores a deleted id or is new.
-  private classify(tr: Transaction, c: Change, pool: { id: number; ch: string; used?: boolean }[], hints: Hints) {
+  private classify(cause: Cause, c: Change, pool: { id: number; ch: string; used?: boolean }[], pasteNonce: string | null | undefined) {
     const T = c.text;
     const none = (): (number | null)[] => new Array(T.length).fill(null);
-    if (tr.isUserEvent("undo") || tr.isUserEvent("redo")) {
+    if (cause === "undo") {
       return { ids: this.matchGap(c.fromB, T), src: "o" as Src, kind: "u" as RestoreKind };
     }
-    if (tr.isUserEvent("move")) {
+    if (cause === "move") {
       const ids = Array.from(T, (ch) => {
         const p = pool.find((x) => !x.used && x.ch === ch && !this.alive[x.id]);
         if (!p) return null;
@@ -163,8 +195,8 @@ export class Recorder {
       });
       return { ids, src: "o" as Src, kind: "m" as RestoreKind };
     }
-    if (tr.isUserEvent("input.paste") && hints.pasteNonce) return this.classifyPaste(T, hints.pasteNonce);
-    if (tr.isUserEvent("input.paste")) {
+    if (cause === "paste" && pasteNonce) return this.classifyPaste(T, pasteNonce);
+    if (cause === "paste") {
       // No nonce on the clipboard: fall back to comparing with this session's last copy.
       const clip = this.clip;
       if (clip && clip.kind === "cut" && T === clip.raw && clip.ids.length === T.length && clip.ids.every((id) => !this.alive[id])) {
@@ -175,11 +207,7 @@ export class Recorder {
         clip && (T === clip.raw || T === clip.clipText || T === clip.clipText + "\n" || clip.parts.includes(T));
       return { ids: none(), src: (internal ? "c" : "p") as Src, kind: "m" as RestoreKind };
     }
-    let src: Src = "o";
-    if (tr.isUserEvent("input.drop")) src = "p";
-    else if (tr.isUserEvent("input.copyline")) src = "c";
-    else if (tr.isUserEvent("input.complete")) src = "o";
-    else if (tr.isUserEvent("input") || tr.isUserEvent("indent")) src = hints.typedOk && !hints.replacement ? "t" : "o";
+    const src: Src = cause === "drop" ? "p" : cause === "copyline" ? "c" : cause === "typed" ? "t" : "o";
     return { ids: none(), src, kind: "m" as RestoreKind };
   }
 
@@ -257,7 +285,7 @@ export class Recorder {
 
   // Mirrors CodeMirror's copiedRange(): selected ranges, or whole lines if nothing is selected.
   captureClip(state: EditorState, kind: "cut" | "copy") {
-    let ranges = state.selection.ranges.filter((r) => !r.empty).map((r) => ({ from: r.from, to: r.to }));
+    const ranges = state.selection.ranges.filter((r) => !r.empty).map((r) => ({ from: r.from, to: r.to }));
     const parts: string[] = [];
     let clipText: string;
     if (ranges.length) {
@@ -277,12 +305,26 @@ export class Recorder {
       }
       clipText = lines.join(state.lineBreak);
     }
-    ranges = ranges.sort((x, y) => x.from - y.from);
+    return this.captureRanges(kind, ranges, (from, to) => state.sliceDoc(from, to), parts, clipText);
+  }
+
+  // Registers a copy of the given ranges and returns its nonce. `parts` and
+  // `clipText` are what the editor puts on the clipboard, per range and joined.
+  // `live` gives the ids of the text the ranges refer to, if not the current text.
+  captureRanges(
+    kind: "cut" | "copy",
+    ranges: { from: number; to: number }[],
+    slice: (from: number, to: number) => string,
+    parts: string[],
+    clipText: string,
+    live = this.live,
+  ) {
+    ranges = ranges.slice().sort((x, y) => x.from - y.from);
     const ids: number[] = [];
     let raw = "";
     for (const r of ranges) {
-      ids.push(...this.live.slice(r.from, r.to));
-      raw += state.sliceDoc(r.from, r.to);
+      ids.push(...live.slice(r.from, r.to));
+      raw += slice(r.from, r.to);
     }
     const nonce = randomId();
     this.clip = { kind, raw, ids, parts, clipText, nonce };

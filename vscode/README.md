@@ -4,15 +4,24 @@ An experiment in recording provenance while writing Markdown in VS Code. It reus
 
 ## How it works
 
-The recording editor is a custom editor for `.md` files. It runs the web app's CodeMirror editor and recorder in a webview and keeps VS Code's `TextDocument` in step with it, so saving, dirty state and the built-in Markdown preview work as usual. When the `.md` file is saved, `name.prov.json` is written next to it.
+Recording happens in VS Code's own text editor, so keybindings, themes and most other extensions work as usual. Every `.md` file that has a `.prov.json` next to it is recorded while it is open, in whichever editor it is edited. When the `.md` file is saved, `name.prov.json` is written next to it.
 
-We chose a webview over VS Code's own text editor because the extension API does not say whether a change came from a keystroke, a paste, an autocompletion or another extension. Inside the webview the recorder sees the same key and clipboard events as in the browser. The trade-off is that the recording editor does not have VS Code's keybindings, Vim mode, or other extensions.
+The extension API does not say whether a change came from a keystroke, a paste, an autocompletion or another extension, so the extension infers it as follows.
 
-- A `.md` file with a `.prov.json` next to it opens in the recording editor. Choosing "Reopen Editor With… Text Editor", or the "Reopen as Plain Text" button, opens it as plain text for the rest of the session. The setting `arewehuman.autoOpen` turns the redirect off.
-- A `.md` file without one opens as plain text. "Record with arewehuman" (editor title bar, Explorer context menu) starts a recording in which the current text is marked as imported. "arewehuman: New Recorded Document…" creates an empty one, in the folder of the current file by default.
-- A leading YAML frontmatter block (between `---` lines) is metadata rather than writing, so it is not recorded. The recording editor shows it in a separate field above the text ("Add frontmatter" in the status bar), and the recorded text is the rest of the file. A site that checks a post against its recording should therefore compare the text after the frontmatter.
-- Changes made to the file outside the recording editor (another editor, git, an AI agent, a file change on disk) are recorded as "other" the next time the recording editor sees them.
-- A `.prov.json` file opens in the replay viewer. "Show Replay" in the editor title bar shows the current recording, including unsaved edits.
+- *Typed.* VS Code sends every character typed into a text editor through its `type` command (and IME input through `compositionType` and `replacePreviousChar`). While a recorded file is open, the extension takes over these commands and passes each call on to VS Code's built-in version, as Vim emulators do. A change made during one of these calls is typed. This includes brackets closed automatically and indentation added after Enter, but not accepted completions or inline suggestions, which are "other".
+- *Pasted.* A paste provider sees each paste before it happens, together with the clipboard's contents. On copy, it attaches a nonce next to the text, as the web app does (see "Copy and paste" in `../SPEC.md`), so a cut pasted back into the same file is a move.
+- *Undo and redo* are reported by VS Code and restore the original character ids.
+- *Moves.* An edit that removes exactly the characters it inserts, such as moving a line or dragging a selection, is a move.
+- Anything else, including edits by other extensions, AI agents, formatters, and changes to the file on disk, is "other".
+
+Only one extension can take over the `type` command. If another one has it (for example a Vim emulator), the extension instead counts any single character (or a line break) inserted in the focused editor as typed. This is weaker, since a single character inserted by another extension is then also counted as typed, and the status bar tooltip says when it is in effect.
+
+- "Record with arewehuman" (editor title bar, Explorer context menu) starts a recording of the current file, in which its current text is marked as imported. "arewehuman: New Recorded Document…" creates an empty one, in the folder of the current file by default.
+- The status bar shows that a file is being recorded and how much of it was typed. Text that was not typed is highlighted; "arewehuman: Toggle Highlighting of Non-Typed Text" turns this off.
+- A leading YAML frontmatter block (between `---` lines) is metadata rather than writing, so it is not recorded. The recorded text is the rest of the file, with `\n` line breaks. A site that checks a post against its recording should therefore compare the text after the frontmatter.
+- Changes made while the extension was not running are recorded as "other" the next time the file is opened.
+- Edits since the last save are kept in the extension's storage (never deleted text), so that they survive a restart.
+- A `.prov.json` file opens in the replay viewer. "Show Replay" in the editor title bar, or a click on the status bar item, shows the current recording, including unsaved edits.
 
 ## Trying it
 
@@ -21,13 +30,13 @@ npm install
 npm run build
 ```
 
-Then open this folder in VS Code and press F5, or run `code --extensionDevelopmentPath=$PWD`. To install it for real, run `npm run package` and install the `.vsix`.
+Then open this folder in VS Code and press F5, or run `code --extensionDevelopmentPath=$PWD`. To install it for real, run `npm run package` and install the `.vsix`. It requires VS Code 1.97 or later.
 
 ## Known limitations
 
-- The Markdown preview does not scroll with the recording editor.
-- Only one recording editor per file.
-- A cut is recognized as a move when pasted back into the same file while VS Code stays open, including after closing and reopening the editor. After a restart, or from another window, it is recorded as pasted.
+- While a file is being recorded, every character typed in any VS Code editor passes through the extension, which adds a small delay when the extension host is busy. Vim emulators and other extensions that take over `type` cannot be used at the same time, except in the weaker mode described above.
+- Tab (indentation) and edits made by other commands, such as "Copy Line Down", are recorded as "other".
+- A cut is recognized as a move when pasted back into the same file within the same VS Code window. After a restart, or from another window, it is recorded as pasted.
 - Renaming or moving the `.md` file does not move its `.prov.json`.
-- Reverting the file, or VS Code restoring a dirty file after a restart without the webview's saved state, is recorded as "other".
+- Editing the same file in two VS Code windows at once produces two conflicting recordings.
 - Recording in VS Code is no harder to forge than recording in the browser. The limitations in the main README apply unchanged.

@@ -1,15 +1,23 @@
 import * as vscode from "vscode";
-import { splitFrontmatter } from "../webview/frontmatter";
+import { Recorder, type Cause } from "../../src/editor/recorder";
+import { CLIP_MIME, clipPayload, MemoryClips, parseClipPayload } from "../../src/editor/clips";
+import { SRC_LABEL, type ProvDoc, type Src } from "../../src/prov/format";
+import { parseProvDoc } from "../../src/util";
+import { sha256 } from "../../src/prov/chain";
+import { bodyOf, Session } from "./session";
+import { Typing } from "./typing";
 
-const EDITOR = "arewehuman.editor";
 const VIEWER = "arewehuman.viewer";
+const MD: vscode.DocumentSelector = [
+  { language: "markdown", scheme: "file" },
+  { language: "markdown", scheme: "vscode-remote" },
+];
 
 const isMd = (u: vscode.Uri) => /\.md$/i.test(u.path);
 const provUri = (md: vscode.Uri) => md.with({ path: md.path.replace(/\.md$/i, "") + ".prov.json" });
 const mdUri = (prov: vscode.Uri) => prov.with({ path: prov.path.replace(/\.prov\.json$/i, "") + ".md" });
 const baseName = (u: vscode.Uri) => u.path.split("/").pop()!;
-// The recorded part of a Markdown file: everything after its frontmatter.
-const bodyOf = (text: string | null) => (text === null ? null : splitFrontmatter(text).body);
+const recordable = (d: vscode.TextDocument) => (d.uri.scheme === "file" || d.uri.scheme === "vscode-remote") && isMd(d.uri);
 
 async function exists(u: vscode.Uri) {
   try {
@@ -28,116 +36,222 @@ async function readText(u: vscode.Uri): Promise<string | null> {
   }
 }
 
-// Files whose recording should be written to disk as soon as the editor opens
-// (Record / New Document), rather than at the first save.
-const pendingStart = new Set<string>();
-// Files the user chose to edit as plain text this session; never redirected.
-const textChosen = new Set<string>();
+// Every open .md file with a .prov.json next to it is recorded, in whatever
+// text editor it is edited.
+const sessions = new Map<string, Session>();
+const loading = new Map<string, Promise<Session | null>>();
 
-// Recent copies made in recording editors (see src/editor/clips.ts): nonces
-// and character ids, never text. Kept here so that they outlive a webview.
-let clipLog: unknown[] = [];
+// Recent copies made in recorded documents in this window (see
+// src/editor/clips.ts): nonces and character ids, never text.
+const clips = new MemoryClips();
 
-// One open recording editor. The recorder itself lives in the webview; the
-// extension keeps the TextDocument in step with it and writes the sidecar.
-class Session {
-  private webviewText: string;
-  private applying: string[] = []; // texts of our own edits not yet seen as change events
-  private queue: Promise<unknown> = Promise.resolve();
-  private reqs = new Map<number, (doc: unknown) => void>();
-  private nextReq = 1;
-  private ready!: () => void;
-  readonly isReady = new Promise<void>((r) => (this.ready = r));
+// A paste or drop announced by a provider or command, to be matched with the
+// change event that follows it.
+const pending = new Map<string, { cause: Cause; nonce?: string | null; t: number }>();
+const markPending = (doc: vscode.TextDocument, cause: Cause, nonce?: string | null) => {
+  const key = doc.uri.toString();
+  const p = pending.get(key);
+  // A paste provider sees the clipboard; keep what it found.
+  if (p && p.nonce !== undefined && Date.now() - p.t < 2000) return;
+  pending.set(key, { cause, nonce, t: Date.now() });
+};
 
-  constructor(
-    readonly document: vscode.TextDocument,
-    readonly panel: vscode.WebviewPanel,
-  ) {
-    this.webviewText = document.getText();
+const typing = new Typing((doc) => markPending(doc, "paste"));
+
+function causeOf(e: vscode.TextDocumentChangeEvent): { cause: Cause; nonce?: string | null } {
+  if (e.reason === vscode.TextDocumentChangeReason.Undo || e.reason === vscode.TextDocumentChangeReason.Redo) return { cause: "undo" };
+  if (typing.owned && typing.isTyped(e)) return { cause: "typed" };
+  const key = e.document.uri.toString();
+  const p = pending.get(key);
+  if (p) {
+    pending.delete(key);
+    if (Date.now() - p.t < 2000) return { cause: p.cause, nonce: p.nonce };
   }
+  if (!typing.owned && typing.isTyped(e)) return { cause: "typed" };
+  return { cause: "other" };
+}
 
-  async onMessage(m: any) {
-    if (m.type === "ready") {
-      const key = this.document.uri.toString();
-      this.webviewText = this.document.getText();
-      this.panel.webview.postMessage({
-        type: "init",
-        text: this.webviewText,
-        prov: await readText(provUri(this.document.uri)),
-        title: baseName(this.document.uri).replace(/\.md$/i, ""),
-        startNow: pendingStart.delete(key),
-        clips: clipLog,
-        key,
-      });
-      this.ready();
-    } else if (m.type === "edit") {
-      this.webviewText = m.text;
-      this.queue = this.queue.then(() => this.applyText(m.text));
-    } else if (m.type === "writeProv") {
-      await this.queue;
-      await this.writeProv(m.doc);
-    } else if (m.type === "response") {
-      this.reqs.get(m.id)?.(m.doc);
-      this.reqs.delete(m.id);
-    } else if (m.type === "clip") {
-      clipLog = [...clipLog, m.entry].slice(-20);
-    } else if (m.type === "notice") {
-      vscode.window.showWarningMessage(`arewehuman: ${m.text}`);
+// Edits made since the last save are kept in extension storage, so that they
+// survive a restart (VS Code restores unsaved files). Like the provenance file,
+// this never contains deleted text.
+let storageDir: vscode.Uri;
+const unsavedUri = async (doc: vscode.TextDocument) => vscode.Uri.joinPath(storageDir, (await sha256(doc.uri.toString())) + ".json");
+const persistTimers = new Map<Session, ReturnType<typeof setTimeout>>();
+const persisting = new Map<string, Promise<void>>();
+
+function persist(s: Session) {
+  clearTimeout(persistTimers.get(s));
+  persistTimers.delete(s);
+  const key = s.document.uri.toString();
+  const p = (async () => {
+    await persisting.get(key);
+    try {
+      await vscode.workspace.fs.createDirectory(storageDir);
+      await vscode.workspace.fs.writeFile(await unsavedUri(s.document), new TextEncoder().encode(JSON.stringify(await s.toDoc())));
+    } catch {
+      /* only unsaved edits are at stake */
     }
-  }
+  })();
+  persisting.set(key, p);
+  return p;
+}
 
-  // Replaces the smallest span that turns the document into `text`.
-  private async applyText(text: string) {
-    const old = this.document.getText();
-    if (old === text) return;
-    let a = 0;
-    while (a < old.length && a < text.length && old[a] === text[a]) a++;
-    let b = 0;
-    while (b < old.length - a && b < text.length - a && old[old.length - 1 - b] === text[text.length - 1 - b]) b++;
-    const edit = new vscode.WorkspaceEdit();
-    const range = new vscode.Range(this.document.positionAt(a), this.document.positionAt(old.length - b));
-    edit.replace(this.document.uri, range, text.slice(a, text.length - b));
-    this.applying.push(text);
-    if (!(await vscode.workspace.applyEdit(edit))) this.applying.splice(this.applying.indexOf(text), 1);
-  }
-
-  // A change that did not come from the webview: another editor, a file change
-  // on disk, or VS Code's own undo (Edit menu).
-  onDocumentChange(e: vscode.TextDocumentChangeEvent) {
-    const text = e.document.getText();
-    const k = this.applying.indexOf(text);
-    if (k >= 0) {
-      this.applying.splice(0, k + 1);
-      return;
-    }
-    if (text === this.webviewText) return;
-    this.webviewText = text;
-    const reason =
-      e.reason === vscode.TextDocumentChangeReason.Undo ? "undo" : e.reason === vscode.TextDocumentChangeReason.Redo ? "redo" : null;
-    this.panel.webview.postMessage({ type: "external", text, reason });
-  }
-
-  async getProv(): Promise<any> {
-    await this.isReady;
-    await this.queue;
-    const id = this.nextReq++;
-    const p = new Promise<unknown>((r) => this.reqs.set(id, r));
-    this.panel.webview.postMessage({ type: "getProv", id });
-    return p;
-  }
-
-  async writeProv(doc: any) {
-    if (!doc) return;
-    if (doc.text !== splitFrontmatter(this.document.getText()).body)
-      vscode.window.showWarningMessage("arewehuman: the recorded text differs from the document being saved; the provenance file may not match.");
-    await vscode.workspace.fs.writeFile(provUri(this.document.uri), new TextEncoder().encode(JSON.stringify(doc)));
+async function loadUnsaved(doc: vscode.TextDocument): Promise<ProvDoc | null> {
+  const t = await readText(await unsavedUri(doc));
+  try {
+    return t ? parseProvDoc(t) : null;
+  } catch {
+    return null;
   }
 }
 
-const sessions = new Map<string, Session>();
-let activeSession: Session | null = null;
+async function writeProv(s: Session) {
+  const doc = await s.toDoc();
+  if (doc.text !== bodyOf(s.document.getText()))
+    vscode.window.showWarningMessage("arewehuman: the recorded text differs from the document being saved; the provenance file may not match.");
+  await vscode.workspace.fs.writeFile(provUri(s.document.uri), new TextEncoder().encode(JSON.stringify(doc)));
+  clearTimeout(persistTimers.get(s));
+  persistTimers.delete(s);
+  await vscode.workspace.fs.delete(await unsavedUri(s.document)).then(undefined, () => {});
+}
 
-function webviewHtml(webview: vscode.Webview, extUri: vscode.Uri, mode: "editor" | "viewer") {
+// Starts recording `doc` if it has a provenance file, or, with `create`, starts
+// a new recording in which the current text is imported.
+function start(doc: vscode.TextDocument, create = false): Promise<Session | null> {
+  const key = doc.uri.toString();
+  const s = sessions.get(key);
+  if (s) return Promise.resolve(s);
+  const l = loading.get(key);
+  if (l) return l;
+  const p = load(doc, create).finally(() => loading.delete(key));
+  loading.set(key, p);
+  return p;
+}
+
+async function load(doc: vscode.TextDocument, create: boolean): Promise<Session | null> {
+  const key = doc.uri.toString();
+  await persisting.get(key); // the document may have just been closed and reopened
+  const provText = await readText(provUri(doc.uri));
+  if (provText === null && !create) return null;
+  let side: ProvDoc | null = null;
+  let err: string | null = null;
+  if (provText !== null) {
+    try {
+      side = parseProvDoc(provText);
+    } catch (e) {
+      err = (e as Error).message;
+    }
+  }
+  // Prefer the stored unsaved edits when they extend the provenance file, and
+  // whichever recording matches the document as it is now.
+  const saved = side && (await loadUnsaved(doc));
+  const body = bodyOf(doc.getText());
+  const candidates = [saved && side && saved.t0 === side.t0 && saved.events.length >= side.events.length ? saved : null, side]
+    .filter((d): d is ProvDoc => !!d)
+    .sort((a, b) => Number(b.text === body) - Number(a.text === body));
+  if (doc.isClosed) return null;
+  let session: Session | null = null;
+  for (const d of candidates) {
+    try {
+      session = new Session(doc, Recorder.resume(d, Date.now()), d.text);
+      break;
+    } catch (e) {
+      err = (e as Error).message;
+    }
+  }
+  if (!session && provText !== null) {
+    const choice = await vscode.window.showErrorMessage(
+      `arewehuman: the provenance file next to ${baseName(doc.uri)} cannot be resumed (${err ?? "unknown error"}). Edits to it are not being recorded.`,
+      "Start a New Recording",
+    );
+    if (choice !== "Start a New Recording" || doc.isClosed) return null;
+  }
+  if (!session) {
+    const now = bodyOf(doc.getText());
+    session = new Session(doc, Recorder.fresh(Date.now(), now), now);
+    create = true;
+  }
+  session.rec.clips = clips;
+  session.rec.docKey = key;
+  sessions.set(key, session);
+  typing.enable();
+  if (create) await writeProv(session);
+  else if (session.outsideChange) {
+    const { del, ins } = session.outsideChange;
+    vscode.window.showInformationMessage(
+      `arewehuman: ${baseName(doc.uri)} was changed outside the recorder since its recording was last saved (${del} characters removed, ${ins} added). These changes are recorded as "other".`,
+    );
+  }
+  refresh();
+  return session;
+}
+
+function stop(doc: vscode.TextDocument) {
+  const key = doc.uri.toString();
+  const s = sessions.get(key);
+  if (!s) return;
+  if (persistTimers.has(s)) void persist(s);
+  sessions.delete(key);
+  pending.delete(key);
+  if (!sessions.size) typing.disable();
+  refresh();
+}
+
+// Highlighting of non-typed text, and the status bar item.
+const alpha = { light: "42", dark: "61" }; // 26% and 38%, as in the web app
+const colors: Record<Exclude<Src, "t">, { light: string; dark: string }> = {
+  p: { light: "#eb6834", dark: "#d95926" },
+  c: { light: "#1baf7a", dark: "#199e70" },
+  x: { light: "#eda100", dark: "#c98500" },
+  o: { light: "#e87ba4", dark: "#d55181" },
+};
+const decorations = Object.fromEntries(
+  Object.entries(colors).map(([s, c]) => [
+    s,
+    vscode.window.createTextEditorDecorationType({
+      light: { backgroundColor: c.light + alpha.light },
+      dark: { backgroundColor: c.dark + alpha.dark },
+      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+    }),
+  ]),
+) as Record<Exclude<Src, "t">, vscode.TextEditorDecorationType>;
+
+let status: vscode.StatusBarItem;
+let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+const refresh = () => {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(update, 150);
+};
+
+function update() {
+  const highlight = vscode.workspace.getConfiguration("arewehuman").get<boolean>("highlightNonTyped", true);
+  for (const ed of vscode.window.visibleTextEditors) {
+    const s = sessions.get(ed.document.uri.toString());
+    const ranges: Record<string, vscode.Range[]> = { p: [], c: [], x: [], o: [] };
+    if (s && highlight) for (const r of s.sourceRuns()) if (r.src !== "t") ranges[r.src].push(r.range);
+    for (const [src, deco] of Object.entries(decorations)) ed.setDecorations(deco, ranges[src]);
+  }
+
+  const s = vscode.window.activeTextEditor && sessions.get(vscode.window.activeTextEditor.document.uri.toString());
+  void vscode.commands.executeCommand("setContext", "arewehuman.recording", !!s);
+  if (!s) return void status.hide();
+  const counts = s.counts();
+  const total = s.rec.live.length;
+  const pct = (n: number) => (total ? Math.round((100 * n) / total) : 0);
+  status.text = `$(record) Recording · typed ${pct(counts.t)}%`;
+  const md = new vscode.MarkdownString();
+  md.appendMarkdown(`**Recording ${baseName(s.document.uri)}.** The provenance file is written when you save.\n\n`);
+  md.appendMarkdown(`${total.toLocaleString()} characters: ` + (["t", "p", "c", "x", "o"] as Src[]).filter((k) => counts[k]).map((k) => `${SRC_LABEL[k]} ${pct(counts[k])}%`).join(", ") + "\n\n");
+  if (!typing.owned)
+    md.appendMarkdown("Another extension (such as a Vim emulator) handles typing, so typed text is recognized only approximately: any single character inserted in the focused editor counts as typed.\n\n");
+  md.appendMarkdown("Click to show the replay.");
+  status.tooltip = md;
+  status.show();
+}
+
+// The replay viewer, a webview. Renders a .prov.json file, or, for "Show Replay",
+// a recording in progress.
+function webviewHtml(webview: vscode.Webview, extUri: vscode.Uri) {
   const js = webview.asWebviewUri(vscode.Uri.joinPath(extUri, "dist", "webview.js"));
   const css = webview.asWebviewUri(vscode.Uri.joinPath(extUri, "dist", "webview.css"));
   const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -150,48 +264,20 @@ function webviewHtml(webview: vscode.Webview, extUri: vscode.Uri, mode: "editor"
 <link rel="stylesheet" href="${css}">
 </head>
 <body>
-<div id="root" data-mode="${mode}"></div>
+<div id="root"></div>
 <script nonce="${nonce}" src="${js}"></script>
 </body>
 </html>`;
 }
 
-class EditorProvider implements vscode.CustomTextEditorProvider {
-  constructor(private ctx: vscode.ExtensionContext) {}
-
-  resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel) {
-    const key = document.uri.toString();
-    panel.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, "dist")] };
-    panel.webview.html = webviewHtml(panel.webview, this.ctx.extensionUri, "editor");
-    const s = new Session(document, panel);
-    sessions.set(key, s);
-    activeSession = s;
-    textChosen.delete(key);
-    const subs = [
-      panel.webview.onDidReceiveMessage((m) => s.onMessage(m)),
-      vscode.workspace.onDidChangeTextDocument((e) => {
-        if (e.document === document && e.contentChanges.length) s.onDocumentChange(e);
-      }),
-      panel.onDidChangeViewState(() => {
-        if (panel.active) activeSession = s;
-      }),
-    ];
-    panel.onDidDispose(() => {
-      subs.forEach((d) => d.dispose());
-      if (sessions.get(key) === s) sessions.delete(key);
-      if (activeSession === s) activeSession = null;
-    });
-  }
-}
-
-// Renders a .prov.json file. Also used, with a document passed in directly, for
-// "Show Replay" on a recording in progress.
 class ViewerProvider implements vscode.CustomTextEditorProvider {
   constructor(private ctx: vscode.ExtensionContext) {}
 
   resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel) {
-    const send = async () =>
-      panel.webview.postMessage({ type: "show", prov: document.getText(), md: bodyOf(await readText(mdUri(document.uri))) });
+    const send = async () => {
+      const md = await readText(mdUri(document.uri));
+      panel.webview.postMessage({ type: "show", prov: document.getText(), md: md === null ? null : bodyOf(md) });
+    };
     setupViewer(this.ctx, panel, send);
     const sub = vscode.workspace.onDidChangeTextDocument((e) => {
       if (e.document === document) void send();
@@ -202,26 +288,11 @@ class ViewerProvider implements vscode.CustomTextEditorProvider {
 
 function setupViewer(ctx: vscode.ExtensionContext, panel: vscode.WebviewPanel, send: () => unknown) {
   panel.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(ctx.extensionUri, "dist")] };
-  panel.webview.html = webviewHtml(panel.webview, ctx.extensionUri, "viewer");
+  panel.webview.html = webviewHtml(panel.webview, ctx.extensionUri);
   const sub = panel.webview.onDidReceiveMessage((m) => {
     if (m.type === "ready") void send();
   });
   panel.onDidDispose(() => sub.dispose());
-}
-
-// Opens `uri` with `viewType` where its current text tab is, then closes that tab.
-async function switchTo(uri: vscode.Uri, viewType: string) {
-  const key = uri.toString();
-  const old = vscode.window.tabGroups.all
-    .flatMap((g) => g.tabs)
-    .filter((t) =>
-      viewType === EDITOR
-        ? t.input instanceof vscode.TabInputText && t.input.uri.toString() === key
-        : t.input instanceof vscode.TabInputCustom && t.input.viewType === EDITOR && t.input.uri.toString() === key,
-    );
-  const viewColumn = old[0]?.group.viewColumn ?? vscode.ViewColumn.Active;
-  await vscode.commands.executeCommand("vscode.openWith", uri, viewType, { viewColumn, preview: false });
-  if (old.length) await vscode.window.tabGroups.close(old, true);
 }
 
 function targetUri(arg: unknown): vscode.Uri | undefined {
@@ -232,19 +303,81 @@ function targetUri(arg: unknown): vscode.Uri | undefined {
 }
 
 export function activate(ctx: vscode.ExtensionContext) {
+  storageDir = vscode.Uri.joinPath(ctx.globalStorageUri, "unsaved");
+  status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  status.command = "arewehuman.replay";
+  ctx.subscriptions.push(status, ...Object.values(decorations), { dispose: () => typing.disable() });
+
   ctx.subscriptions.push(
-    vscode.window.registerCustomEditorProvider(EDITOR, new EditorProvider(ctx), {
-      webviewOptions: { retainContextWhenHidden: true },
-      supportsMultipleEditorsPerDocument: false,
-    }),
     vscode.window.registerCustomEditorProvider(VIEWER, new ViewerProvider(ctx), { webviewOptions: { retainContextWhenHidden: true } }),
   );
 
-  // The provenance file is written just before the .md is saved, so the two match.
+  // Recording.
   ctx.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument((d) => {
+      if (recordable(d)) void start(d);
+    }),
+    vscode.workspace.onDidCloseTextDocument(stop),
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      const s = sessions.get(e.document.uri.toString());
+      if (!s || !e.contentChanges.length) return;
+      const { cause, nonce } = causeOf(e);
+      s.onChange(e, cause, nonce);
+      clearTimeout(persistTimers.get(s));
+      persistTimers.set(s, setTimeout(() => void persist(s), 1000));
+      refresh();
+    }),
+    // The provenance file is written just before the .md is saved, so the two match.
     vscode.workspace.onWillSaveTextDocument((e) => {
       const s = sessions.get(e.document.uri.toString());
-      if (s) e.waitUntil(s.getProv().then((doc) => s.writeProv(doc)));
+      if (s) e.waitUntil(writeProv(s));
+    }),
+  );
+  for (const d of vscode.workspace.textDocuments) if (recordable(d)) void start(d);
+
+  // Copy and paste (see "Copy and paste" in SPEC.md). On copy, a nonce goes on
+  // VS Code's clipboard data next to the text; on paste, the nonce found there
+  // tells the recorder where the text came from. Neither provider changes what
+  // is pasted or dropped.
+  ctx.subscriptions.push(
+    vscode.languages.registerDocumentPasteEditProvider(
+      MD,
+      {
+        prepareDocumentPaste(document, ranges, dataTransfer) {
+          const nonce = sessions.get(document.uri.toString())?.captureCopy(ranges);
+          if (!nonce) return;
+          dataTransfer.set(CLIP_MIME, new vscode.DataTransferItem(clipPayload(nonce)));
+        },
+        async provideDocumentPasteEdits(document, _ranges, dataTransfer) {
+          if (!sessions.has(document.uri.toString())) return;
+          const item = dataTransfer.get(CLIP_MIME);
+          markPending(document, "paste", item ? parseClipPayload(await item.asString()) : null);
+          return undefined;
+        },
+      },
+      {
+        providedPasteEditKinds: [vscode.DocumentDropOrPasteEditKind.Text.append("arewehuman")],
+        copyMimeTypes: [CLIP_MIME],
+        pasteMimeTypes: ["text/plain", CLIP_MIME],
+      },
+    ),
+    vscode.languages.registerDocumentDropEditProvider(
+      MD,
+      {
+        provideDocumentDropEdits(document) {
+          if (sessions.has(document.uri.toString())) markPending(document, "drop");
+          return undefined;
+        },
+      },
+      { dropMimeTypes: ["*/*"] },
+    ),
+  );
+
+  ctx.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(refresh),
+    vscode.window.onDidChangeVisibleTextEditors(refresh),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("arewehuman")) refresh();
     }),
   );
 
@@ -252,10 +385,10 @@ export function activate(ctx: vscode.ExtensionContext) {
     vscode.commands.registerCommand("arewehuman.record", async (arg?: unknown) => {
       const uri = targetUri(arg);
       if (!uri || !isMd(uri)) return void vscode.window.showErrorMessage("arewehuman: open a .md file first.");
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc, { preview: false });
       if (sessions.has(uri.toString())) return;
-      if (!(await exists(provUri(uri)))) pendingStart.add(uri.toString());
-      textChosen.delete(uri.toString());
-      await switchTo(uri, EDITOR);
+      await start(doc, !(await exists(provUri(uri))));
     }),
 
     vscode.commands.registerCommand("arewehuman.newDocument", async (arg?: unknown) => {
@@ -272,74 +405,29 @@ export function activate(ctx: vscode.ExtensionContext) {
       if (await exists(uri))
         return void vscode.window.showErrorMessage(`arewehuman: ${baseName(uri)} already exists. Use "Record with arewehuman" on it instead.`);
       await vscode.workspace.fs.writeFile(uri, new Uint8Array());
-      pendingStart.add(uri.toString());
-      await vscode.commands.executeCommand("vscode.openWith", uri, EDITOR, { preview: false });
-    }),
-
-    vscode.commands.registerCommand("arewehuman.openAsText", async () => {
-      const s = activeSession;
-      if (!s) return;
-      textChosen.add(s.document.uri.toString());
-      await switchTo(s.document.uri, "default");
-    }),
-
-    vscode.commands.registerCommand("arewehuman.preview", async () => {
-      const s = activeSession;
-      if (s) await vscode.commands.executeCommand("markdown.showPreviewToSide", s.document.uri);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await start(doc, true);
+      await vscode.window.showTextDocument(doc, { preview: false });
     }),
 
     vscode.commands.registerCommand("arewehuman.replay", async () => {
-      const s = activeSession;
-      if (!s) return;
-      const doc = await s.getProv();
+      const ed = vscode.window.activeTextEditor;
+      const s = ed && sessions.get(ed.document.uri.toString());
+      if (!s) return void vscode.window.showErrorMessage("arewehuman: the active editor is not being recorded.");
+      const doc = await s.toDoc();
       const panel = vscode.window.createWebviewPanel(VIEWER, `Replay: ${baseName(s.document.uri)}`, vscode.ViewColumn.Beside, {
         retainContextWhenHidden: true,
       });
       setupViewer(ctx, panel, () => panel.webview.postMessage({ type: "show", prov: JSON.stringify(doc), md: null }));
     }),
+
+    vscode.commands.registerCommand("arewehuman.toggleHighlight", async () => {
+      const cfg = vscode.workspace.getConfiguration("arewehuman");
+      await cfg.update("highlightNonTyped", !cfg.get<boolean>("highlightNonTyped", true), vscode.ConfigurationTarget.Global);
+    }),
   );
-
-  // Redirect .md files that have a recording to the recording editor when they
-  // open in a text tab. Looking at the set of open text tabs (rather than only
-  // "opened" events) also catches the preview tab being reused for another file.
-  // "Reopen Editor With… Text Editor" opens the text tab before closing the
-  // recording tab, so a text tab appearing while one is open is the user's choice.
-  let seen = new Set<string>();
-  const checkTabs = () => {
-    const all = vscode.window.tabGroups.all.flatMap((g) => g.tabs);
-    const recording = new Set(
-      all.filter((t) => t.input instanceof vscode.TabInputCustom && t.input.viewType === EDITOR).map((t) => (t.input as vscode.TabInputCustom).uri.toString()),
-    );
-    const now = new Set<string>();
-    for (const t of all) if (t.input instanceof vscode.TabInputText && isMd(t.input.uri)) now.add(t.input.uri.toString());
-    for (const key of now) {
-      if (seen.has(key)) continue;
-      if (recording.has(key)) textChosen.add(key);
-      else void maybeRedirect(vscode.Uri.parse(key));
-    }
-    seen = now;
-  };
-  const maybeRedirect = async (uri: vscode.Uri) => {
-    const key = uri.toString();
-    if (!vscode.workspace.getConfiguration("arewehuman").get<boolean>("autoOpen", true)) return;
-    if (textChosen.has(key) || sessions.has(key)) return;
-    if (await exists(provUri(uri))) await switchTo(uri, EDITOR);
-  };
-  ctx.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(checkTabs));
-  checkTabs();
-
-  // When a recorded file is open as plain text, say so.
-  const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  status.text = "$(circle-slash) Not recording";
-  status.tooltip = "This file has an arewehuman recording, but edits in this text editor are not recorded. They will appear as 'other' in its history. Click to record.";
-  status.command = "arewehuman.record";
-  const updateStatus = async () => {
-    const d = vscode.window.activeTextEditor?.document;
-    if (d && isMd(d.uri) && (await exists(provUri(d.uri)))) status.show();
-    else status.hide();
-  };
-  ctx.subscriptions.push(status, vscode.window.onDidChangeActiveTextEditor(updateStatus));
-  void updateStatus();
 }
 
-export function deactivate() {}
+export async function deactivate() {
+  await Promise.all([...persistTimers.keys()].map(persist));
+}

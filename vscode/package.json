@@ -1,24 +1,18 @@
 {
   "name": "arewehuman",
   "displayName": "arewehuman",
-  "description": "Record the provenance of every character you write in a Markdown file, and replay it.",
+  "description": "Record the provenance of every character you write in a Markdown file in VS Code's editor, and replay it.",
   "version": "0.0.1",
   "publisher": "magland",
   "license": "MIT",
   "private": true,
   "repository": { "type": "git", "url": "https://github.com/magland/arewehuman" },
-  "engines": { "vscode": "^1.90.0" },
+  "engines": { "vscode": "^1.97.0" },
   "categories": ["Other"],
   "main": "./dist/extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": ["onStartupFinished", "onLanguage:markdown"],
   "contributes": {
     "customEditors": [
-      {
-        "viewType": "arewehuman.editor",
-        "displayName": "arewehuman (recording)",
-        "selector": [{ "filenamePattern": "*.md" }],
-        "priority": "option"
-      },
       {
         "viewType": "arewehuman.viewer",
         "displayName": "arewehuman replay",
@@ -29,34 +23,29 @@
     "commands": [
       { "command": "arewehuman.newDocument", "title": "New Recorded Document…", "category": "arewehuman" },
       { "command": "arewehuman.record", "title": "Record with arewehuman", "category": "arewehuman", "icon": "$(record)" },
-      { "command": "arewehuman.openAsText", "title": "Reopen as Plain Text (Not Recorded)", "category": "arewehuman", "icon": "$(go-to-file)" },
-      { "command": "arewehuman.preview", "title": "Open Markdown Preview to the Side", "category": "arewehuman", "icon": "$(open-preview)" },
-      { "command": "arewehuman.replay", "title": "Show Replay", "category": "arewehuman", "icon": "$(play-circle)" }
+      { "command": "arewehuman.replay", "title": "Show Replay", "category": "arewehuman", "icon": "$(play-circle)" },
+      { "command": "arewehuman.toggleHighlight", "title": "Toggle Highlighting of Non-Typed Text", "category": "arewehuman" }
     ],
     "menus": {
       "editor/title": [
-        { "command": "arewehuman.preview", "when": "activeCustomEditorId == arewehuman.editor", "group": "navigation@1" },
-        { "command": "arewehuman.replay", "when": "activeCustomEditorId == arewehuman.editor", "group": "navigation@2" },
-        { "command": "arewehuman.openAsText", "when": "activeCustomEditorId == arewehuman.editor", "group": "navigation@3" },
-        { "command": "arewehuman.record", "when": "editorLangId == markdown && resourceExtname == .md", "group": "navigation@9" }
+        { "command": "arewehuman.replay", "when": "arewehuman.recording", "group": "navigation@2" },
+        { "command": "arewehuman.record", "when": "editorLangId == markdown && resourceExtname == .md && !arewehuman.recording", "group": "navigation@9" }
       ],
       "explorer/context": [
         { "command": "arewehuman.record", "when": "resourceExtname == .md", "group": "navigation@9" },
         { "command": "arewehuman.newDocument", "when": "explorerResourceIsFolder", "group": "navigation@9" }
       ],
       "commandPalette": [
-        { "command": "arewehuman.openAsText", "when": "activeCustomEditorId == arewehuman.editor" },
-        { "command": "arewehuman.preview", "when": "activeCustomEditorId == arewehuman.editor" },
-        { "command": "arewehuman.replay", "when": "activeCustomEditorId == arewehuman.editor" }
+        { "command": "arewehuman.replay", "when": "arewehuman.recording" }
       ]
     },
     "configuration": {
       "title": "arewehuman",
       "properties": {
-        "arewehuman.autoOpen": {
+        "arewehuman.highlightNonTyped": {
           "type": "boolean",
           "default": true,
-          "description": "Open a .md file in the recording editor when a .prov.json file with the same name sits next to it."
+          "description": "Highlight text in recorded documents that was not typed (pasted, copied, imported or other)."
         }
       }
     }
@@ -68,7 +57,7 @@
     "package": "npm run build && npx @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
-    "@types/vscode": "~1.90.0",
+    "@types/vscode": "~1.97.0",
     "esbuild": "^0.28.2"
   }
 }

@@ -1,5 +1,4 @@
 import { createRoot } from "react-dom/client";
-import { EditorApp } from "./EditorApp";
 import { ViewerApp } from "./ViewerApp";
 import "../../src/styles.css";
 import "./vscode.css";
@@ -14,4 +13,4 @@ syncTheme();
 new MutationObserver(syncTheme).observe(document.body, { attributes: true, attributeFilter: ["class"] });
 
 const root = document.getElementById("root")!;
-createRoot(root).render(root.dataset.mode === "viewer" ? <ViewerApp /> : <EditorApp />);
+createRoot(root).render(<ViewerApp />);

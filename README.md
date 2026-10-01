@@ -42,7 +42,7 @@ Future work will add server-signed timestamps on the hash chain, which would sho
 
 ## VS Code extension
 
-A prototype extension in [`vscode/`](vscode/) records Markdown files edited in VS Code, using the same recorder and file format, and shows replays of `.prov.json` files. See [vscode/README.md](vscode/README.md).
+A prototype extension in [`vscode/`](vscode/) records Markdown files edited in VS Code's own editor, using the same recorder and file format, and shows replays of `.prov.json` files. See [vscode/README.md](vscode/README.md).
 
 ## Development
 

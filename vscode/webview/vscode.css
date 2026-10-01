@@ -13,12 +13,3 @@ html:root[data-theme] {
   --error: var(--vscode-errorForeground);
 }
 body { padding: 0; font-family: var(--vscode-font-family, var(--sans)); font-size: var(--vscode-font-size, 13px); }
-.awh-vs { display: flex; flex-direction: column; height: 100vh; }
-.awh-vs .editor-host { flex: 1; min-height: 0; }
-.awh-vs .statusbar { font-size: 12px; }
-.awh-vs .banner { padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface-2); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.awh-vs .banner .spacer { flex: 1; }
-.rec-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--error); }
-.awh-vs .frontmatter { padding: 8px 16px; border-bottom: 1px solid var(--border); display: grid; gap: 4px; }
-.awh-vs .frontmatter textarea { font-family: var(--vscode-editor-font-family, var(--mono)); font-size: 13px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; resize: vertical; }
-.awh-vs .linkish { border: none; background: transparent; padding: 0; color: var(--link); font-size: inherit; }
