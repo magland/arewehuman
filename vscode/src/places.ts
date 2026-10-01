@@ -97,12 +97,20 @@ export async function moveRecordings(edit: vscode.WorkspaceEdit, from: vscode.Ur
 
 // The name of this workspace: a slug of the arewehuman.workspaceName setting or
 // of git's user.name, plus a random suffix, chosen once per clone and kept in
-// its .git directory (or, without one, in the extension's storage).
-let state: vscode.Memento;
+// its .git directory (or, without one, in a file in the extension's storage).
+let namesFile: vscode.Uri;
 const names = new Map<string, Promise<string>>();
 
 export function initPlaces(ctx: vscode.ExtensionContext) {
-  state = ctx.globalState;
+  namesFile = vscode.Uri.joinPath(ctx.globalStorageUri, "workspace-names.json");
+}
+
+async function storedNames(): Promise<Record<string, string>> {
+  try {
+    return JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(namesFile)));
+  } catch {
+    return {};
+  }
 }
 
 function workspaceName(root: vscode.Uri): Promise<string> {
@@ -137,12 +145,15 @@ async function chooseName(root: vscode.Uri): Promise<string> {
   const file = git && vscode.Uri.joinPath(git, "arewehuman-workspace");
   const kept = file
     ? await vscode.workspace.fs.readFile(file).then((b) => new TextDecoder().decode(b).trim(), () => "")
-    : (state.get<Record<string, string>>("workspaceNames") ?? {})[root.toString()] ?? "";
+    : (await storedNames())[root.toString()] ?? "";
   if (VALID.test(kept)) return kept;
   const base = slug(vscode.workspace.getConfiguration("arewehuman").get<string>("workspaceName", "") || (await gitUserName(root))) || "workspace";
   const name = `${base}-${Array.from(crypto.getRandomValues(new Uint8Array(2)), (b) => b.toString(16).padStart(2, "0")).join("")}`;
   if (file) await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(name + "\n"));
-  else await state.update("workspaceNames", { ...(state.get<Record<string, string>>("workspaceNames") ?? {}), [root.toString()]: name });
+  else {
+    await vscode.workspace.fs.createDirectory(parent(namesFile));
+    await vscode.workspace.fs.writeFile(namesFile, new TextEncoder().encode(JSON.stringify({ ...(await storedNames()), [root.toString()]: name })));
+  }
   return name;
 }
 

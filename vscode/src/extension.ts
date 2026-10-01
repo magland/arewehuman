@@ -112,10 +112,18 @@ function onDisk(content: string, mark: { events: number; checkpoints: number }, 
   return { ...mark, head: Buffer.byteLength(content) - Buffer.byteLength(final), final };
 }
 
-// Writes the recording file. Usually this appends the new events and
-// checkpoints in place of the old final line, and then the new final line; the
-// whole file is written only if it is not as this session last left it.
-async function writeLog(s: Session) {
+// Writes the recording file, after any write of it still under way. Usually
+// this appends the new events and checkpoints in place of the old final line,
+// and then the new final line; the whole file is written only if it is not as
+// this session last left it.
+const writes = new Map<Session, Promise<unknown>>();
+function writeLog(s: Session): Promise<void> {
+  const p = (writes.get(s) ?? Promise.resolve()).then(() => writeLogNow(s));
+  writes.set(s, p.catch(() => {}));
+  return p;
+}
+
+async function writeLogNow(s: Session) {
   const doc = await s.toDoc();
   if (doc.text !== bodyOf(s.document.getText()))
     vscode.window.showWarningMessage("arewehuman: the recorded text differs from the document being saved; the recording may not match.");
@@ -156,6 +164,15 @@ async function writeLog(s: Session) {
   clearTimeout(persistTimers.get(s));
   persistTimers.delete(s);
   await vscode.workspace.fs.delete(await unsavedUri(s.document.uri)).then(undefined, () => {});
+}
+
+async function writeIfSaved(s: Session) {
+  const { version } = s.document;
+  const disk = await readText(s.document.uri);
+  if (disk === null || s.document.isClosed || s.document.version !== version || disk !== s.document.getText()) return;
+  clearTimeout(persistTimers.get(s));
+  persistTimers.delete(s);
+  await writeLog(s);
 }
 
 // Starts recording `doc` if it has a recording, or, with `create`, starts a new
@@ -240,6 +257,8 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
     vscode.window.showInformationMessage(
       `arewehuman: ${baseName(doc.uri)} was changed outside the recorder since its recording was last saved (${del} characters removed, ${ins} added). These changes are recorded as "other".`,
     );
+    // The file on disk already has these changes, so the recording should too.
+    if (!doc.isDirty) await writeLog(session);
   }
   refresh();
   return session;
@@ -385,6 +404,12 @@ export function activate(ctx: vscode.ExtensionContext) {
       s.onChange(e, cause, nonce);
       clearTimeout(persistTimers.get(s));
       persistTimers.set(s, setTimeout(() => void persist(s), 1000));
+      // A change that leaves the document as it is on disk (VS Code reloaded it
+      // after it changed there, as after a git pull, or an undo went back to
+      // the saved text) is written to the recording at once, since no save
+      // will follow. (The event's isDirty still describes the document before
+      // the change, so the file itself is compared.)
+      if (cause === "other" || cause === "undo") void writeIfSaved(s);
       refresh();
     }),
     // The recording is written just before the .md is saved, so the two match.
