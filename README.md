@@ -4,6 +4,12 @@ A Markdown editor that records the provenance of every character, so that a fini
 
 Live app: https://magland.github.io/arewehuman/
 
+Posts about it:
+
+- [Are we human?](https://jeremy.magland.org/posts/2026-09-29-are-we-human/) (2026-09-29): why it exists and how it works, written in the app (the post's replay shows how).
+- [Are we human file format v2](https://jeremy.magland.org/posts/2026-10-01-are-we-human-file-format-v2/) (2026-10-01, video): the recording format, with examples in VS Code.
+- [Are we human git collaboration](https://jeremy.magland.org/posts/2026-10-01-are-we-human-git-collaboration/) (2026-10-01, video): recording a project that several people edit through git, one recording per workspace.
+
 ## Motivation
 
 A statement such as "written without AI" is easy to make and impossible to check. Dan Romik's [ReelDocs](https://blog.danromik.com/on-provably-writing-without-ai) addresses this by recording the writing of a document and letting readers watch a replay. arewehuman takes a similar approach with two differences. First, the values of deleted characters are never stored, so text that you write and then erase does not become part of the record. Second, everything runs in the browser and the result is a pair of plain files (`name.md` and the recording, `name.md.awh.jsonl`) that can be verified by anyone, without an account or a server.
