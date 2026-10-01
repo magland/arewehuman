@@ -76,6 +76,7 @@ export class Recorder {
   private nDeleted = 0;
   private checkpoints: [number, string][] = [];
   private chainTask: Promise<string>;
+  private commit: string | null = null; // the last commit noted
 
   private constructor(t0: number, events: Ev[], checkpoints: [number, string][] | null) {
     this.t0 = t0;
@@ -86,6 +87,7 @@ export class Recorder {
     for (const id of res.live) this.alive[id] = true;
     for (let id = 0; id < res.chars.length; id++) this.alive[id] = !!this.alive[id];
     this.seq = this.live.slice();
+    for (const ev of events) if (ev[0] === "g") this.commit = ev[2];
     if (checkpoints) {
       this.checkpoints = checkpoints.slice();
       this.chainTask = Promise.resolve(checkpoints.length ? checkpoints[checkpoints.length - 1][1] : "").then(
@@ -94,8 +96,11 @@ export class Recorder {
     } else this.chainTask = genesis(t0);
   }
 
-  static fresh(t0: number, imported = ""): Recorder {
+  // A new recording, in which `imported` is the text already there. `commit` is
+  // the git commit that text comes from, if known.
+  static fresh(t0: number, imported = "", commit: string | null = null): Recorder {
     const events: Ev[] = [["s", 0]];
+    if (commit && imported.length) events.push(["g", 0, commit]);
     if (imported.length) events.push(insertEv(0, 0, imported, "x"));
     return new Recorder(t0, events, null);
   }
@@ -177,6 +182,13 @@ export class Recorder {
         i = j;
       }
     }
+  }
+
+  // Notes the git commit the workspace is at, if it changed since the last note.
+  noteCommit(t: number, commit: string | null) {
+    if (!commit || commit === this.commit) return;
+    this.commit = commit;
+    this.events.push(["g", Math.max(t, lastTime(this.events)), commit]);
   }
 
   // Decides, for each inserted character, whether it restores a deleted id or is new.

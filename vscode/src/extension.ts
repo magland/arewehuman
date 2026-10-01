@@ -7,7 +7,7 @@ import { bodyLines, finalLine, parseLog, parseRecording, serializeLog } from "..
 import { sha256 } from "../../src/prov/chain";
 import { bodyOf, Session, type OnDisk } from "./session";
 import { Typing } from "./typing";
-import { initPlaces, mdOf, moveRecordings, othersOf, placeOf } from "./places";
+import { gitHead, initPlaces, mdOf, moveRecordings, othersOf, placeOf, recordingsBeside } from "./places";
 
 const VIEWER = "arewehuman.viewer";
 const MD: vscode.DocumentSelector = [
@@ -221,7 +221,7 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   let session: Session | null = null;
   for (const d of candidates) {
     try {
-      session = new Session(doc, Recorder.resume(d, Date.now()), d.text);
+      session = new Session(doc, Recorder.resume(d, Date.now()), d.text, () => gitHead(doc.uri));
       // Appending is safe only if the session continues the file's own events.
       if (d === side) session.disk = disk;
       break;
@@ -238,7 +238,7 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   }
   if (!session) {
     const now = bodyOf(doc.getText());
-    session = new Session(doc, Recorder.fresh(Date.now(), now), now);
+    session = new Session(doc, Recorder.fresh(Date.now(), now, gitHead(doc.uri)), now, () => gitHead(doc.uri));
     create = true;
   }
   session.log = place.log;
@@ -348,11 +348,27 @@ function webviewHtml(webview: vscode.Webview, extUri: vscode.Uri) {
 </html>`;
 }
 
+// For a file recorded in several workspaces, the message that shows who wrote
+// what and each workspace's replay. `current` is the text to use for one of
+// the recordings in place of what is on disk.
+async function projectMessage(log: vscode.Uri, current: string, initial?: string) {
+  const all = await recordingsBeside(log);
+  if (all.length < 2) return null;
+  const md = await readText(mdOf(log));
+  const recs = await Promise.all(
+    all.map(async (r) => ({ name: r.name, log: r.uri.toString() === log.toString() ? current : ((await readText(r.uri)) ?? "") })),
+  );
+  return { type: "project", title: baseName(mdOf(log)).replace(/\.md$/i, ""), md: md === null ? null : bodyOf(md), recs, initial };
+}
+
 class ViewerProvider implements vscode.CustomTextEditorProvider {
   constructor(private ctx: vscode.ExtensionContext) {}
 
   resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel) {
     const send = async () => {
+      const name = baseName(document.uri).replace(/\.awh\.jsonl$/i, "");
+      const project = await projectMessage(document.uri, document.getText(), name);
+      if (project) return void panel.webview.postMessage(project);
       const md = await readText(mdOf(document.uri));
       panel.webview.postMessage({ type: "show", log: document.getText(), md: md === null ? null : bodyOf(md) });
     };
@@ -516,11 +532,12 @@ export function activate(ctx: vscode.ExtensionContext) {
       const ed = vscode.window.activeTextEditor;
       const s = ed && sessions.get(ed.document.uri.toString());
       if (!s) return void vscode.window.showErrorMessage("arewehuman: the active editor is not being recorded.");
-      const doc = await s.toDoc();
+      const log = serializeLog(await s.toDoc());
+      const project = await projectMessage(s.log!, log);
       const panel = vscode.window.createWebviewPanel(VIEWER, `Replay: ${baseName(s.document.uri)}`, vscode.ViewColumn.Beside, {
         retainContextWhenHidden: true,
       });
-      setupViewer(ctx, panel, () => panel.webview.postMessage({ type: "show", log: serializeLog(doc), md: null }));
+      setupViewer(ctx, panel, () => panel.webview.postMessage(project ?? { type: "show", log, md: null }));
     }),
 
     vscode.commands.registerCommand("arewehuman.toggleHighlight", async () => {

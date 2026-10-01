@@ -51,14 +51,17 @@ const fmt = (ms: number) => {
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 };
 
-export function Replay({ a }: { a: Analysis }) {
+// Plays from the start, or, given `start`, shows the document after the first
+// `start` events, paused.
+export function Replay({ a, start }: { a: Analysis; start?: number }) {
   const { doc, tl, res } = a;
   const events = doc.events;
   const [speed, setSpeed] = useState("normal");
   const ct = useMemo(() => timing(events, speed), [events, speed]);
   const total = events.length ? ct[events.length - 1] : 0;
-  const [pos, setPos] = useState(0);
-  const [playing, setPlaying] = useState(true);
+  const [pos, setPos] = useState(() => (start ? ct[Math.min(start, events.length) - 1] : 0));
+  const [playing, setPlaying] = useState(!start);
+  const scrolled = useRef(false);
   const textRef = useRef<HTMLDivElement>(null);
   const posRef = useRef(0);
   posRef.current = pos;
@@ -123,7 +126,8 @@ export function Replay({ a }: { a: Analysis }) {
   useEffect(() => {
     if (!textRef.current) return;
     textRef.current.innerHTML = html;
-    if (playing) textRef.current.querySelector(".caret")?.scrollIntoView({ block: "nearest" });
+    if (playing || !scrolled.current) textRef.current.querySelector(".caret")?.scrollIntoView({ block: playing ? "nearest" : "center" });
+    scrolled.current = true;
   }, [html, playing]);
 
   const done = pos >= total && total > 0;

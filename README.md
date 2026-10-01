@@ -30,6 +30,8 @@ The values of deleted characters are held in memory only for the current session
 
 The Replay page accepts a `.md.awh.jsonl` recording (optionally with its `.md` file, and also the older `.prov.json` format), checks that the event log reproduces the text exactly and that the SHA-256 hash chain and seal are intact, and then plays back the writing of the document. Speeds are Fast, Normal, and Slow (typing compressed into about 30 s, 60 s, or 150 s, with long pauses shown as short beats) or the recorded typing pace at ×1, ×2, ×5, or ×10. Pasted, imported, or otherwise non-typed text is highlighted, and later-deleted text appears as placeholder blocks.
 
+To see who wrote what in a document edited in several workspaces (see below), drop all of its recordings on the Replay page together, with or without the `.md` file.
+
 A recording can be linked directly as `https://magland.github.io/arewehuman/#/view?url=<url of the .md.awh.jsonl>`, provided the host allows cross-origin requests (a raw GitHub gist URL works).
 
 ## Limitations

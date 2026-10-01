@@ -21,6 +21,8 @@ export function applyEvent(live: number[], chars: CharInfo[], ev: Ev, alive: Uin
   switch (ev[0]) {
     case "s":
       return null;
+    case "g":
+      return typeof ev[2] === "string" && /^[0-9a-f]{40,64}$/.test(ev[2]) ? null : "malformed commit hash";
     case "i": {
       const [, t, pos, n, src, nl] = ev;
       if (!SRCS.includes(src)) return `unknown source "${src}"`;

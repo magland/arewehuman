@@ -39,6 +39,10 @@ The workspace name is chosen the first time a file is recorded in a clone, from 
 
 Renaming or moving a file or folder in VS Code (in the Explorer, or by another extension) moves its recordings too.
 
+When the changes from outside arrive in a git repository, the recording also notes the commit the workspace was at (see `../SPEC.md`).
+
+For a file recorded in several workspaces, "Show Replay" (and opening any of its recordings) shows *who wrote what*: the file's text colored by the workspace whose recording shows each passage being written, with tabs for each workspace's replay. Clicking a passage opens that workspace's replay just before the passage was written.
+
 ## Trying it
 
 ```bash
@@ -54,6 +58,6 @@ Then open this folder in VS Code and press F5, or run `code --extensionDevelopme
 - Tab (indentation) and edits made by other commands, such as "Copy Line Down", are recorded as "other".
 - A cut is recognized as a move when pasted back into the same file within the same VS Code window. After a restart, or from another window, it is recorded as pasted.
 - Renaming or moving a file outside VS Code (with `git mv` or in a shell) does not move its recordings. Older `.prov.json` recordings are not picked up; convert one by importing it into the web app and exporting it again.
-- The replay viewer shows one workspace's recording at a time. Combining the recordings of several workspaces, to show who typed what in the final text, is planned.
+- Who wrote what covers the text as it stands. A single replay of everyone's writing in time order is not available yet; each workspace's replay is shown separately.
 - Editing the same file in two VS Code windows at once produces two conflicting recordings.
 - Recording in VS Code is no harder to forge than recording in the browser. The limitations in the main README apply unchanged.

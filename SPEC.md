@@ -41,12 +41,15 @@ Every inserted character receives an implicit id: the first inserted character i
 | insert | `["i", t, pos, n, src]` or `["i", t, pos, n, src, breaks]` | `n` new characters inserted at `pos`, with the next `n` ids |
 | delete | `["d", t, pos, n]` | the `n` characters at `pos` were deleted |
 | restore | `["r", t, pos, kind, ranges]` | previously deleted characters reinserted at `pos` |
+| commit | `["g", t, commit]` | the workspace was at this git commit (a lowercase hex hash) |
 
 `breaks` lists the line breaks among the inserted characters, as increasing offsets from the start of the insert, so `["i", 5000, 12, 4, "p", [1, 3]]` inserts `?\n?\n`. It is left out when there are none. A replay can then keep the line structure of text that was later deleted, which matters most for code. The cost is that the record shows how a deleted passage was divided into lines, though not what it said. Recordings made before 2026-10-01 have no `breaks`, so in those the line breaks of deleted text are unknown.
 
 `src` is one of `t` (typed), `p` (pasted from outside the document), `c` (copied from within the document), `x` (imported), `o` (other). A character's source never changes.
 
 For restore events, `kind` is `u` (undo or redo) or `m` (moved: cut and pasted within the document, dragged, or a line moved), and `ranges` lists the restored ids in order as flattened `[start, length]` pairs, so `[10, 3, 40, 1]` means ids 10, 11, 12, 40. A restored id must currently be deleted.
+
+A commit event is recorded, when the document is in a git repository, before changes that arrive from outside the editor (as after a `git pull`), if the commit has changed since the last one noted, and at the start of a recording that begins with text already in the file. It changes nothing in the document. With the repository's history, it tells which version of the files those changes came from, so that a later tool can match them exactly with another workspace's recording (see "Several workspaces" below).
 
 A single editor transaction may produce several events with the same `t`. Within a transaction, deletions are listed first (last position first), followed by insertions and restorations (first position first).
 
@@ -55,6 +58,10 @@ A single editor transaction may produce several events with the same `t`. Within
 This section describes editor behavior; it does not affect the file format. When text is copied or cut, a recording editor puts two things on the clipboard: the plain text, which any application can paste, and a JSON object `{"arewehuman": 1, "nonce": "…"}` under the type `application/x-arewehuman`, which other applications ignore. The nonce is random. The editor keeps a registry, outside the recording, that maps each recent nonce to the document and the ids of the copied characters. The registry holds no text, so cut text is not stored.
 
 On paste, the editor looks the nonce up in its registry rather than trusting the clipboard, since any program can write to the clipboard. Characters cut from the same document that are still deleted are restored with their original ids (a restore of kind `m`), including in a later session, provided the pasted text lines up one to one with them. Any other paste from the same document is a copy (`c`). A paste from another document, or with a nonce the registry does not know, is an ordinary paste (`p`): the history of text written elsewhere is not part of this document's log, so a replay could not show how it was written. Without any nonce, the editor falls back to comparing the pasted text with the last copy made in the current session.
+
+## Several workspaces
+
+A document edited in several clones of a git repository has one recording per workspace (see `vscode/README.md`, "Where recordings are kept"). Each recording is complete and verifiable on its own, and none refers to another; text that arrived from another workspace is `o` (or `x`, if it was there when the recording started). To tell who wrote what, a viewer lines up each recording's final text with the document (lines, then words, as in `diffText`), keeping only whole matching lines and matching stretches of at least 12 characters. Each character of the document is then credited to the recording in which it was typed, or else pasted, or else the earliest recording that has it. This is exact for text in the document; text that one workspace wrote and another later deleted cannot be traced across recordings, since deleted values are not recorded. Commit events are meant to allow that in future.
 
 ## Derived per-character records
 

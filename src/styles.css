@@ -167,6 +167,26 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .replay-note { margin: 10px 0 0; }
 .ghost { color: var(--muted); opacity: 0.55; letter-spacing: -0.5px; }
+/* who wrote what (ProjectView) */
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--border); margin: 6px 0 14px; }
+.tab { border: 1px solid transparent; border-bottom: none; background: transparent; color: var(--muted); padding: 6px 12px; border-radius: 6px 6px 0 0; cursor: pointer; font: inherit; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; margin-bottom: -1px; }
+.tab.active { color: var(--text); background: var(--surface); border-color: var(--border); }
+.who-legend { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 4px; }
+.who-legend .ok { color: var(--ok); }
+.who-legend .fail { color: var(--error); }
+.who-text {
+  white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--serif); font-size: 16px; line-height: 1.75;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; max-height: 70vh; overflow: auto;
+}
+.who { background: color-mix(in srgb, var(--who) 22%, transparent); border-radius: 2px; cursor: pointer; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.who:hover { background: color-mix(in srgb, var(--who) 40%, transparent); }
+.who.src-p, .who-mark.src-p { text-decoration: underline wavy var(--s-p); text-underline-offset: 3px; }
+.who.src-x, .who-mark.src-x { text-decoration: underline wavy var(--s-x); text-underline-offset: 3px; }
+.who.src-o, .who-mark.src-o { text-decoration: underline wavy var(--s-o); text-underline-offset: 3px; }
+.who.none { background: none; cursor: default; color: var(--muted); text-decoration: underline dotted; }
+.who-mark { display: inline-block; width: 18px; height: 10px; }
+.who-mark::before { content: "abc"; font-size: 10px; font-style: normal; }
+.who-mark.none::before { color: var(--muted); }
 .untyped { background: color-mix(in srgb, var(--s-p) var(--tint), transparent); border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .caret { display: inline-block; width: 0; height: 1.2em; border-left: 2px solid var(--accent); vertical-align: text-bottom; margin-right: -2px; }
 

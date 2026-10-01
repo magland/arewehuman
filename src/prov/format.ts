@@ -32,7 +32,10 @@ export type SessionEv = ["s", number];
 export type InsertEv = ["i", number, number, number, Src] | ["i", number, number, number, Src, number[]]; // t, pos, count, src, line breaks
 export type DeleteEv = ["d", number, number, number]; // t, pos, count
 export type RestoreEv = ["r", number, number, RestoreKind, number[]]; // t, pos, kind, id ranges [start, len, start, len, ...]
-export type Ev = SessionEv | InsertEv | DeleteEv | RestoreEv;
+// The git commit the workspace was at, noted when changes arrived from outside
+// the editor (as after a git pull) and the commit had changed since the last note.
+export type CommitEv = ["g", number, string]; // t, commit hash
+export type Ev = SessionEv | InsertEv | DeleteEv | RestoreEv | CommitEv;
 
 export interface ProvDoc {
   format: typeof FORMAT;

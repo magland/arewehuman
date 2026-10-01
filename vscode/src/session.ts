@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { Recorder, type Cause, type Change } from "../../src/editor/recorder";
 import type { ProvDoc, Src } from "../../src/prov/format";
 import { diffText } from "../../src/prov/diff";
-import { splitFrontmatter } from "./frontmatter";
+import { splitFrontmatter } from "../../src/prov/frontmatter";
 
 // The recorded text of a Markdown file: everything after its frontmatter, with
 // \n line breaks.
@@ -57,18 +57,24 @@ export class Session {
   disk: OnDisk | null = null;
 
   // `recorded` is the text the recorder currently holds. If the document
-  // differs from it, the difference is recorded as "other".
+  // differs from it, the difference is recorded as "other". `head` gives the
+  // git commit the workspace is at, which is noted with changes from outside.
   constructor(
     readonly document: vscode.TextDocument,
     readonly rec: Recorder,
     recorded: string,
+    private head: () => string | null = () => null,
   ) {
     this.text = document.getText();
     const cs = diffText(recorded, bodyOf(this.text));
     this.outsideChange = cs.length
       ? { del: cs.reduce((n, c) => n + c.removed.length, 0), ins: cs.reduce((n, c) => n + c.text.length, 0) }
       : null;
-    if (cs.length) rec.applyChanges(cs, Date.now() - rec.t0, "other");
+    if (cs.length) {
+      const t = Date.now() - rec.t0;
+      rec.noteCommit(t, head());
+      rec.applyChanges(cs, t, "other");
+    }
   }
 
   get body() {
@@ -100,7 +106,9 @@ export class Session {
       if (!changes.length) return;
     }
     if ((cause === "other" || cause === "drop") && isMove(changes)) cause = "move";
-    this.rec.applyChanges(changes, Date.now() - this.rec.t0, cause, pasteNonce);
+    const t = Date.now() - this.rec.t0;
+    if (cause === "other") this.rec.noteCommit(t, this.head());
+    this.rec.applyChanges(changes, t, cause, pasteNonce);
   }
 
   // The change event in terms of the recorded text, or null if it touches the

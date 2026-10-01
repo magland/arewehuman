@@ -1,20 +1,36 @@
 import { useEffect, useState } from "react";
 import { analyze, type Analysis } from "../../src/viewer/analyze";
 import { ViewerBody } from "../../src/viewer/ViewerPage";
+import { ProjectView, type NamedRecording } from "../../src/viewer/ProjectView";
 import { parseRecording } from "../../src/prov/log";
 import { vscode } from "./api";
 
+interface Project {
+  title: string;
+  md: string | null;
+  recs: NamedRecording[];
+  initial?: string;
+}
+
+// Shows one recording ("show"), or a file recorded in several workspaces ("project").
 export function ViewerApp() {
   const [a, setA] = useState<Analysis | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loads, setLoads] = useState(0);
 
   useEffect(() => {
     const on = async (e: MessageEvent) => {
       const m = e.data;
-      if (m?.type !== "show") return;
       try {
-        setA(await analyze(parseRecording(m.log), m.md));
+        if (m?.type === "show") {
+          setA(await analyze(parseRecording(m.log), m.md));
+          setProject(null);
+        } else if (m?.type === "project") {
+          const recs = (m.recs as { name: string; log: string }[]).map((r) => ({ name: r.name, doc: parseRecording(r.log) }));
+          setProject({ title: m.title, md: m.md, recs, initial: m.initial });
+          setA(null);
+        } else return;
         setLoads((n) => n + 1);
         setErr(null);
       } catch (x) {
@@ -26,6 +42,7 @@ export function ViewerApp() {
     return () => window.removeEventListener("message", on);
   }, []);
 
+  if (project) return <ProjectView key={loads} title={project.title} md={project.md} recs={project.recs} initial={project.initial} />;
   if (!a) return <div className="viewer">{err ? <p className="error">{err}</p> : <p className="muted">Loading…</p>}</div>;
   return <ViewerBody a={a} err={err} replayKey={loads} />;
 }

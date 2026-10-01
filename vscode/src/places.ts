@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import { execFile } from "child_process";
+import * as nodefs from "fs";
+import * as nodepath from "path";
 import { LOG_SUFFIX } from "../../src/prov/log";
 
 // Where the recording of a Markdown file is kept.
@@ -160,4 +162,61 @@ async function chooseName(root: vscode.Uri): Promise<string> {
 function gitUserName(root: vscode.Uri): Promise<string> {
   if (root.scheme !== "file") return Promise.resolve("");
   return new Promise((resolve) => execFile("git", ["config", "user.name"], { cwd: root.fsPath, timeout: 3000 }, (err, out) => resolve(err ? "" : out.trim())));
+}
+
+// The commit that the git repository containing `file` is at, or null. It is
+// read from .git directly, and synchronously, so that it can be noted in order
+// with the edit that prompted it.
+const HASH = /^[0-9a-f]{40,64}$/;
+export function gitHead(file: vscode.Uri): string | null {
+  if (file.scheme !== "file") return null;
+  const read = (f: string) => nodefs.readFileSync(f, "utf8");
+  try {
+    for (let dir = nodepath.dirname(file.fsPath); ; ) {
+      const dot = nodepath.join(dir, ".git");
+      if (nodefs.existsSync(dot)) {
+        let git = dot;
+        if (nodefs.statSync(dot).isFile()) {
+          // A worktree or submodule: .git names the real directory.
+          const m = /^gitdir:\s*(.+)$/m.exec(read(dot));
+          if (!m) return null;
+          git = nodepath.resolve(dir, m[1].trim());
+        }
+        const commondir = nodepath.join(git, "commondir");
+        const common = nodefs.existsSync(commondir) ? nodepath.resolve(git, read(commondir).trim()) : git;
+        const head = read(nodepath.join(git, "HEAD")).trim();
+        const ref = /^ref:\s*(.+)$/.exec(head)?.[1];
+        if (!ref) return HASH.test(head) ? head : null;
+        for (const g of [git, common]) {
+          const f = nodepath.join(g, ref);
+          if (nodefs.existsSync(f)) return HASH.test(read(f).trim()) ? read(f).trim() : null;
+        }
+        const packed = nodepath.join(common, "packed-refs");
+        if (!nodefs.existsSync(packed)) return null;
+        const line = read(packed).split("\n").find((l) => l.endsWith(" " + ref));
+        return line && HASH.test(line.split(" ")[0]) ? line.split(" ")[0] : null;
+      }
+      const up = nodepath.dirname(dir);
+      if (up === dir) return null;
+      dir = up;
+    }
+  } catch {
+    return null;
+  }
+}
+
+// All workspaces' recordings of the file that a recording in .arewehuman
+// belongs to (including that one), or an empty list for a recording kept next
+// to its file.
+export async function recordingsBeside(log: vscode.Uri): Promise<{ name: string; uri: vscode.Uri }[]> {
+  if (!log.path.includes(`/${STORE}/`)) return [];
+  const dir = parent(log);
+  try {
+    return (await vscode.workspace.fs.readDirectory(dir))
+      .filter(([name, type]) => name.endsWith(LOG_SUFFIX) && type & vscode.FileType.File)
+      .map(([name]) => ({ name: name.slice(0, -LOG_SUFFIX.length), uri: vscode.Uri.joinPath(dir, name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
 }
