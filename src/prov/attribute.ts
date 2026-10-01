@@ -27,6 +27,7 @@ export interface Origin {
   id: number; // the character's id in that recording
   src: Src;
   t: number; // when it was inserted (epoch ms)
+  author?: string; // who inserted it, in a recording with author events
 }
 
 // "From another file" ("k") ranks with pasted when the other file's recording
@@ -72,7 +73,7 @@ export function attribute(text: string, recs: ProvDoc[]): (Origin | null)[] {
         if (k < 0 || recs[q!].text[k] === ch) return origin(q!, c.from.id, ch, depth + 1);
       }
     }
-    return { rec: r, id, src: c.src, t: recs[r].t0 + c.tIns };
+    return { rec: r, id, src: c.src, t: recs[r].t0 + c.tIns, ...(c.author ? { author: c.author } : {}) };
   };
 
   const out: (Origin | null)[] = new Array(text.length).fill(null);

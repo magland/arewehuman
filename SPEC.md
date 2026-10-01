@@ -42,6 +42,7 @@ Every inserted character receives an implicit id: the first inserted character i
 | delete | `["d", t, pos, n]` | the `n` characters at `pos` were deleted |
 | restore | `["r", t, pos, kind, ranges]` | previously deleted characters reinserted at `pos` |
 | commit | `["g", t, commit]` | the workspace was at this git commit (a lowercase hex hash) |
+| author | `["a", t, name]` | the events that follow, until the next author event, were made by `name` (`""`: unknown) |
 | from another file | `["k", t, pos, rec, ranges]` or `["k", t, pos, rec, ranges, breaks]` | characters `ranges` of recording `rec` moved or copied in at `pos`, with the next ids and source `k` |
 
 `breaks` lists the line breaks among the inserted characters, as increasing offsets from the start of the insert, so `["i", 5000, 12, 4, "p", [1, 3]]` inserts `?\n?\n`. It is left out when there are none. A replay can then keep the line structure of text that was later deleted, which matters most for code. The cost is that the record shows how a deleted passage was divided into lines, though not what it said. Recordings made before 2026-10-01 have no `breaks`, so in those the line breaks of deleted text are unknown.
@@ -53,6 +54,8 @@ For restore events, `kind` is `u` (undo or redo) or `m` (moved: cut and pasted w
 A commit event is recorded, when the document is in a git repository, before changes that arrive from outside the editor (as after a `git pull`), if the commit has changed since the last one noted, and at the start of a recording that begins with text already in the file. It changes nothing in the document. With the repository's history, it tells which version of the files those changes came from, so that a later tool can match them exactly with another workspace's recording (see "Several workspaces" below).
 
 A `k` event (see "Text from another file" below) adds characters like an insert, one for each id in `ranges`, which use the same flattened `[start, length]` form as a restore and name characters of the recording whose `id` (or `t0`) is `rec`. `breaks` is as for an insert.
+
+Author events are used when one recording is shared by several people, as on a collaborative editing server, where the server knows who made each change. Each character is credited to the author in effect at the event that inserted it. A recording without author events is one workspace's, and says nothing about who used it.
 
 A single editor transaction may produce several events with the same `t`. Within a transaction, deletions are listed first (last position first), followed by insertions and restorations (first position first).
 

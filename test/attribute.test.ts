@@ -72,3 +72,32 @@ describe("attribute", () => {
     expect(origins.slice(23).every((o) => o === null)).toBe(true);
   });
 });
+
+describe("authors", () => {
+  it("credits text in a shared recording to whoever typed it", async () => {
+    const rec = Recorder.fresh(1000, "Intro.\n");
+    let text = "Intro.\n";
+    let t = 0;
+    const type = (who: string, s: string, at = text.length) => {
+      rec.noteAuthor((t += 10), who);
+      for (const ch of s) {
+        rec.applyChanges([{ fromA: at, toA: at, fromB: at, text: ch, removed: "" }], (t += 10), "typed");
+        text = text.slice(0, at) + ch + text.slice(at);
+        at++;
+      }
+    };
+    type("alice", "Alice wrote this.\n");
+    type("bob", "Bob wrote this.\n");
+    type("alice", " (and this)", text.indexOf("Bob wrote this.") + 15);
+    expect(rec.events.filter((e) => e[0] === "a").map((e) => e[2])).toEqual(["alice", "bob", "alice"]);
+    const doc = await rec.toDoc(text, "shared");
+    const origins = attribute(text, [doc]);
+    const by = (s: string) => new Set(origins.slice(text.indexOf(s), text.indexOf(s) + s.length).map((o) => o?.author ?? "-"));
+    expect(by("Intro.")).toEqual(new Set(["-"]));
+    expect(by("Alice wrote this.")).toEqual(new Set(["alice"]));
+    expect(by("Bob wrote this.")).toEqual(new Set(["bob"]));
+    expect(by(" (and this)")).toEqual(new Set(["alice"]));
+    rec.noteAuthor((t += 10), "alice"); // unchanged: no event
+    expect(rec.events.filter((e) => e[0] === "a")).toHaveLength(3);
+  });
+});

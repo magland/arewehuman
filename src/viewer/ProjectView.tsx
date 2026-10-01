@@ -16,7 +16,10 @@ export interface NamedRecording {
 }
 
 const COLORS = ["#3b82f6", "#a855f7", "#14b8a6", "#e0a526", "#ef4444", "#64748b", "#ec4899", "#84cc16"];
-const color = (rec: number) => COLORS[rec % COLORS.length];
+
+// Who a character is credited to: a recording, and in a recording shared by
+// several people, the author within it.
+const contributor = (o: Origin) => `${o.rec}|${o.author ?? ""}`;
 
 const HOW: Record<Src, string> = {
   t: "typed",
@@ -88,7 +91,7 @@ export function ProjectView({
   const origins = useMemo(() => attribute(text, recs.map((r) => r.doc)), [text, recs]);
   const runs = useMemo(() => {
     const out: Run[] = [];
-    const key = (o: Origin | null) => (o ? `${o.rec}:${o.src === "c" ? "t" : o.src}` : "-");
+    const key = (o: Origin | null) => (o ? `${contributor(o)}:${o.src === "c" ? "t" : o.src}` : "-");
     origins.forEach((o, i) => {
       const last = out[out.length - 1];
       if (last && key(last.o) === key(o)) last.text += text[i];
@@ -100,6 +103,15 @@ export function ProjectView({
   const total = text.length || 1;
   const pct = (n: number) => `${Math.round((100 * n) / total)}%`;
   const byRec = recs.map((_, r) => origins.filter((o) => o?.rec === r));
+  // Contributors in order of first appearance, each with a color; the
+  // recording's own color for one without authors.
+  const order = new Map<string, number>();
+  for (const o of origins) if (o && !order.has(contributor(o))) order.set(contributor(o), order.size);
+  const colorOf = (key: string) => COLORS[(order.get(key) ?? 0) % COLORS.length];
+  const color = (rec: number) => colorOf(`${rec}|`);
+  const authorsOf = (r: number) => [...new Set(byRec[r].map((o) => o!.author).filter((a): a is string => !!a))];
+  const typed = (os: (Origin | null)[]) => os.filter((o) => o!.src === "t" || o!.src === "c").length;
+  const who = (o: Origin) => (o.author ? (own.length > 1 ? `${o.author} (${recs[o.rec].name})` : o.author) : recs[o.rec].name);
   // Tabs: the document's recordings, and other files' recordings that text came from.
   const shown = recs.map((_, r) => r < own.length || byRec[r].length > 0 || r === tab);
   const bySrc = (s: Src[]) => origins.filter((o) => o && s.includes(o.src)).length;
@@ -127,7 +139,7 @@ export function ProjectView({
         </button>
         {recs.map((r, i) => shown[i] && (
           <button key={r.name} role="tab" className={"tab" + (tab === i ? " active" : "")} aria-selected={tab === i} onClick={() => open(i)}>
-            <i className="swatch" style={{ background: color(i) }} /> {r.name}
+            {authorsOf(i).length === 0 && <i className="swatch" style={{ background: color(i) }} />} {r.name}
           </button>
         ))}
       </div>
@@ -140,9 +152,22 @@ export function ProjectView({
           <ul className="who-legend small">
             {recs.map((r, i) => shown[i] && (
               <li key={r.name}>
-                <i className="swatch" style={{ background: color(i) }} /> <b>{r.name}</b> {pct(byRec[i].length)} of the text
-                {byRec[i].length > 0 && <> ({pct(byRec[i].filter((o) => o!.src === "t" || o!.src === "c").length)} typed)</>}
+                {authorsOf(i).length === 0 && <i className="swatch" style={{ background: color(i) }} />} <b>{r.name}</b> {pct(byRec[i].length)} of
+                the text
+                {byRec[i].length > 0 && <> ({pct(typed(byRec[i]))} typed)</>}
                 {analyses && <RecordingChecks a={analyses[i]} />}
+                {authorsOf(i).length > 0 && (
+                  <ul className="who-authors">
+                    {authorsOf(i).map((a) => {
+                      const mine = byRec[i].filter((o) => o!.author === a);
+                      return (
+                        <li key={a}>
+                          <i className="swatch" style={{ background: colorOf(`${i}|${a}`) }} /> {a} {pct(mine.length)} ({pct(typed(mine))} typed)
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </li>
             ))}
             {bySrc(["p"]) > 0 && <li><i className="who-mark src-p" /> pasted {pct(bySrc(["p"]))}</li>}
@@ -157,8 +182,8 @@ export function ProjectView({
                 <span
                   key={k}
                   className={"who" + (r.o.src === "t" || r.o.src === "c" ? "" : ` src-${r.o.src}`)}
-                  style={{ "--who": color(r.o.rec) } as React.CSSProperties}
-                  title={`${HOW[r.o.src]}: ${recs[r.o.rec].name}, ${fmtClock(r.o.t)}. Click to watch.`}
+                  style={{ "--who": colorOf(contributor(r.o)) } as React.CSSProperties}
+                  title={`${HOW[r.o.src]}: ${who(r.o)}, ${fmtClock(r.o.t)}. Click to watch.`}
                   onClick={() => open(r.o!.rec, eventsBefore(recs[r.o!.rec].doc, r.o!.id))}
                 >
                   {r.text}

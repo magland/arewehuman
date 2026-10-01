@@ -8,6 +8,8 @@ export interface CharInfo {
   nl?: boolean;
   // For source "k": the recording and character it came from.
   from?: { ref: string; id: number };
+  // Who inserted it, in a recording with author events.
+  author?: string;
   // Later deletions and restorations, in order: [t, "d" | "u" | "m"]
   hist: [number, "d" | "u" | "m"][];
 }
@@ -19,10 +21,14 @@ export interface ReplayResult {
 }
 
 // Applies one event to the live id array. Returns an error message or null.
-export function applyEvent(live: number[], chars: CharInfo[], ev: Ev, alive: Uint8Array | boolean[]): string | null {
+// `author` is the one in effect (see AuthorEv), if any.
+export function applyEvent(live: number[], chars: CharInfo[], ev: Ev, alive: Uint8Array | boolean[], author?: string): string | null {
+  const by = author ? { author } : {};
   switch (ev[0]) {
     case "s":
       return null;
+    case "a":
+      return typeof ev[2] === "string" ? null : "malformed author";
     case "g":
       return typeof ev[2] === "string" && /^[0-9a-f]{40,64}$/.test(ev[2]) ? null : "malformed commit hash";
     case "i": {
@@ -35,7 +41,7 @@ export function applyEvent(live: number[], chars: CharInfo[], ev: Ev, alive: Uin
       const ids: number[] = [];
       for (let k = 0; k < n; k++) {
         const id = chars.length;
-        chars.push({ src, tIns: t, hist: [], nl: breaks ? breaks.has(k) : undefined });
+        chars.push({ src, tIns: t, hist: [], nl: breaks ? breaks.has(k) : undefined, ...by });
         alive[id] = true as never;
         ids.push(id);
       }
@@ -55,7 +61,7 @@ export function applyEvent(live: number[], chars: CharInfo[], ev: Ev, alive: Uin
       const ids: number[] = [];
       for (let k = 0; k < n; k++) {
         const id = chars.length;
-        chars.push({ src: "k", tIns: t, hist: [], nl: breaks ? breaks.has(k) : undefined, from: { ref, id: from[k] } });
+        chars.push({ src: "k", tIns: t, hist: [], nl: breaks ? breaks.has(k) : undefined, from: { ref, id: from[k] }, ...by });
         alive[id] = true as never;
         ids.push(id);
       }
@@ -109,6 +115,7 @@ export function replay(doc: Pick<ProvDoc, "events" | "text">): ReplayResult {
   const alive: boolean[] = [];
   const errors: string[] = [];
   let lastT = -Infinity;
+  let author: string | undefined;
   doc.events.forEach((ev, i) => {
     if (errors.length > 20) return;
     if (!Array.isArray(ev)) {
@@ -119,8 +126,9 @@ export function replay(doc: Pick<ProvDoc, "events" | "text">): ReplayResult {
     if (!Number.isInteger(t)) errors.push(`event ${i}: time is not an integer`);
     else if (t < lastT) errors.push(`event ${i}: time goes backwards`);
     lastT = Math.max(lastT, t);
-    const err = applyEvent(live, chars, ev, alive);
+    const err = applyEvent(live, chars, ev, alive, author);
     if (err) errors.push(`event ${i}: ${err}`);
+    else if (ev[0] === "a") author = ev[2] || undefined;
   });
   if (!errors.length && live.length !== doc.text.length)
     errors.push(`replay gives ${live.length} characters but the text has ${doc.text.length}`);

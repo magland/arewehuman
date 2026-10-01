@@ -82,6 +82,7 @@ export class Recorder {
   private checkpoints: [number, string][] = [];
   private chainTask: Promise<string>;
   private commit: string | null = null; // the last commit noted
+  private author: string | null = null; // the author in effect (see noteAuthor)
 
   private constructor(t0: number, events: Ev[], checkpoints: [number, string][] | null, id: string | undefined) {
     this.t0 = t0;
@@ -93,7 +94,10 @@ export class Recorder {
     for (const id of res.live) this.alive[id] = true;
     for (let id = 0; id < res.chars.length; id++) this.alive[id] = !!this.alive[id];
     this.seq = this.live.slice();
-    for (const ev of events) if (ev[0] === "g") this.commit = ev[2];
+    for (const ev of events) {
+      if (ev[0] === "g") this.commit = ev[2];
+      else if (ev[0] === "a") this.author = ev[2];
+    }
     if (checkpoints) {
       this.checkpoints = checkpoints.slice();
       this.chainTask = Promise.resolve(checkpoints.length ? checkpoints[checkpoints.length - 1][1] : "").then(
@@ -205,6 +209,14 @@ export class Recorder {
         i = j;
       }
     }
+  }
+
+  // In a recording shared by several people: notes who makes the edits that
+  // follow ("" when unknown), if that changed.
+  noteAuthor(t: number, author: string) {
+    if (author === this.author) return;
+    this.author = author;
+    this.events.push(["a", Math.max(t, lastTime(this.events)), author]);
   }
 
   // Notes the git commit the workspace is at, if it changed since the last note.
@@ -356,7 +368,8 @@ export class Recorder {
 
   // Registers a copy of the given ranges and returns its nonce. `parts` and
   // `clipText` are what the editor puts on the clipboard, per range and joined.
-  // `live` gives the ids of the text the ranges refer to, if not the current text.
+  // `live` gives the ids of the text the ranges refer to, if not the current
+  // text. `nonce` is the one to use, when the editor chose it.
   captureRanges(
     kind: "cut" | "copy",
     ranges: { from: number; to: number }[],
@@ -364,6 +377,7 @@ export class Recorder {
     parts: string[],
     clipText: string,
     live = this.live,
+    nonce = randomId(),
   ) {
     ranges = ranges.slice().sort((x, y) => x.from - y.from);
     const ids: number[] = [];
@@ -372,7 +386,6 @@ export class Recorder {
       ids.push(...live.slice(r.from, r.to));
       raw += slice(r.from, r.to);
     }
-    const nonce = randomId();
     this.clip = { kind, raw, ids, parts, clipText, nonce };
     this.clips.put({ nonce, doc: this.docKey, ranges: encodeRanges(ids), t: Date.now(), ...(this.project ? { project: this.project, rec: this.ref } : {}) });
     return nonce;

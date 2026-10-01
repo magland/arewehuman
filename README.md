@@ -46,6 +46,10 @@ Future work will add server-signed timestamps on the hash chain, which would sho
 
 A prototype extension in [`vscode/`](vscode/) records files edited in VS Code's own editor (Markdown, LaTeX, code, or any text), using the same recorder and file format, and shows replays of `.md.awh.jsonl` files. A project can keep its recordings in a `.arewehuman` directory, one per workspace, so that collaborators working through git never have to merge them. See [vscode/README.md](vscode/README.md).
 
+## ohagi
+
+[ohagi](https://github.com/magland/ohagi), a self-hosted collaborative LaTeX editor, records projects with arewehuman: a project's settings turn it on, several people editing one file share its recording, with author events naming who made each edit, and a file's who-wrote-what page uses this viewer. See "Recording how a project is written" in ohagi's README.
+
 ## Development
 
 ```bash

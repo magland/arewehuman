@@ -43,7 +43,10 @@ export type CommitEv = ["g", number, string]; // t, commit hash
 // recording's id. They get new ids here, with source "k". Line breaks are
 // listed as for an insert.
 export type FromEv = ["k", number, number, string, number[]] | ["k", number, number, string, number[], number[]]; // t, pos, recording, id ranges, line breaks
-export type Ev = SessionEv | InsertEv | DeleteEv | RestoreEv | CommitEv | FromEv;
+// Who makes the edits that follow, in a recording shared by several people
+// (as on a collaborative editing server): a name, or "" when unknown.
+export type AuthorEv = ["a", number, string]; // t, author
+export type Ev = SessionEv | InsertEv | DeleteEv | RestoreEv | CommitEv | FromEv | AuthorEv;
 
 export interface ProvDoc {
   format: typeof FORMAT;
