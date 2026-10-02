@@ -54,6 +54,10 @@ Future work will add server-signed timestamps on the hash chain, which would sho
 
 A prototype extension in [`vscode/`](vscode/) records files edited in VS Code's own editor (Markdown, LaTeX, code, or any text), using the same recorder and file format, and shows replays of `.md.awh.jsonl` files. A project can keep its recordings in a `.arewehuman` directory, one per workspace, so that collaborators working through git never have to merge them. See [vscode/README.md](vscode/README.md).
 
+## Embedding the editor
+
+Other web pages can embed the recording editor without the web app's UI: `import { EmbeddedEditor } from "arewehuman/embed"` (TypeScript source, for a bundler such as Vite; install the package from this repository). The host passes a file's text and its recording file, and gets back the text and an updated recording file to store. The recording is extended rather than rewritten: the new file is the old one up to its final line, then the new events and checkpoints, then a new final line. If the text differs from the recorded text, the difference is recorded as "other". With no recording, the editor records nothing. See [src/embed/index.ts](src/embed/index.ts). [jeremy.magland.org](https://jeremy.magland.org) uses it to edit posts on the site itself.
+
 ## ohagi
 
 [ohagi](https://github.com/magland/ohagi), a self-hosted collaborative LaTeX editor, records projects with arewehuman: a project's settings turn it on, several people editing one file share its recording, with author events naming who made each edit, and a file's who-wrote-what page uses this viewer. See "Recording how a project is written" in ohagi's README.

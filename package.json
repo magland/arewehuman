@@ -11,6 +11,9 @@
   "author": "Jeremy Magland",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    "./embed": "./src/embed/index.ts"
+  },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-markdown": "^6.5.2",

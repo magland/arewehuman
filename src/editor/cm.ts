@@ -141,10 +141,12 @@ const highlightStyle = HighlightStyle.define([
 
 export const highlightCompartment = new Compartment();
 
+// `rec` is null for an editor that records nothing (used by hosts that also
+// edit files without a recording).
 export function createEditor(
   parent: HTMLElement,
   text: string,
-  rec: Recorder,
+  rec: Recorder | null,
   onChange: () => void,
   showSources: boolean,
   extra: Extension = [],
@@ -152,7 +154,7 @@ export function createEditor(
   const state = EditorState.create({
     doc: text,
     extensions: [
-      recordingPlugin(rec, onChange),
+      rec ? recordingPlugin(rec, onChange) : EditorView.updateListener.of((u) => u.docChanged && onChange()),
       history(),
       drawSelection(),
       EditorView.lineWrapping,
@@ -166,7 +168,7 @@ export function createEditor(
         writingsuggestions: "false",
         "aria-label": "Document",
       }),
-      highlightCompartment.of(showSources ? sourceHighlight(rec) : []),
+      highlightCompartment.of(showSources && rec ? sourceHighlight(rec) : []),
       extra,
     ],
   });
