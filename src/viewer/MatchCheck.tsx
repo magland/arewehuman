@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { renderMarkdown } from "../markdown";
-import { SIGNATURE } from "../share";
+import { SIGNATURES } from "../share";
 
 // A replay link shows how some text was written, not that it is the text the
 // reader received. This lets the reader paste what they received and compare.
@@ -15,7 +15,7 @@ function rendered(md: string) {
 }
 
 function stripSignature(s: string) {
-  const k = s.indexOf(SIGNATURE);
+  const k = Math.max(...SIGNATURES.map((sig) => s.lastIndexOf(sig)));
   return k < 0 ? s : s.slice(0, k);
 }
 

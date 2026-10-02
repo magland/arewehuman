@@ -38,7 +38,7 @@ The Replay page accepts a `.md.awh.jsonl` recording (optionally with its `.md` f
 
 To see who wrote what in a document edited in several workspaces (see below), drop all of its recordings on the Replay page together, with or without the `.md` file.
 
-A recording can also be shared as a link that carries the whole recording in the URL fragment (gzipped, base64url), so nothing is uploaded or hosted: in the editor, Share › Copy replay link. Share › Copy with replay link copies the text itself, rendered, with a small "✎ Watch this being written" link at the end, ready to paste into an email or a chat. A reader who opens such a link can paste the message they received to check that it is the recorded text. Links hold about 10 characters per character of text, so they suit messages and short documents better than long ones. See "Replay links" in [SPEC.md](SPEC.md).
+A recording can also be shared as a link that carries the whole recording in the URL fragment (gzipped, base64url), so nothing is uploaded or hosted: in the editor, Share › Copy replay link. Share › Copy with replay link copies the text itself, rendered, with a small "✎ written by a human" link at the end, ready to paste into an email or a chat. A reader who opens such a link can paste the message they received to check that it is the recorded text. Links hold about 10 characters per character of text, so they suit messages and short documents better than long ones. See "Replay links" in [SPEC.md](SPEC.md).
 
 A hosted recording can be linked directly as `https://magland.github.io/arewehuman/#/view?url=<url of the .md.awh.jsonl>`, provided the host allows cross-origin requests (a raw GitHub gist URL works).
 

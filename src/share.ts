@@ -4,7 +4,9 @@ import { replayLink } from "./prov/link";
 import { escapeHtml } from "./util";
 
 // The line added under a copied message, linking to its replay.
-export const SIGNATURE = "✎ Watch this being written";
+export const SIGNATURE = "✎ written by a human";
+// Signatures used before, still recognized in pasted messages.
+export const SIGNATURES = [SIGNATURE, "✎ Watch this being written"];
 
 // Copies text and HTML to the clipboard. The content is given as a promise
 // and handed to the clipboard within the click, as Safari requires. Where the
