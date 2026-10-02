@@ -5,6 +5,7 @@ import { Recorder } from "./recorder";
 import { LocalStorageClips } from "./clips";
 import { deleteDoc, lastDocId, listDocs, loadDoc, newId, saveDoc, setLastDocId, type DocMeta } from "../storage";
 import { exportDoc, exportMd } from "../util";
+import { copyLink, copyMessage } from "../share";
 import { isRecordingFile, parseRecording } from "../prov/log";
 import { renderMarkdown } from "../markdown";
 import { replay } from "../prov/replay";
@@ -59,7 +60,7 @@ export function EditorPage() {
   const [saveMsg, setSaveMsg] = useState("");
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [docs, setDocs] = useState<DocMeta[]>(listDocs());
-  const [menu, setMenu] = useState<null | "docs" | "export">(null);
+  const [menu, setMenu] = useState<null | "docs" | "export" | "share">(null);
   const [showPreview, setShowPreview] = useState(() => pref("preview", true));
   const [showSources, setShowSources] = useState(() => pref("sources", true));
   const [dragging, setDragging] = useState(false);
@@ -187,6 +188,29 @@ export function EditorPage() {
     return r && v ? r.toDoc(v.state.doc.toString(), titleRef.current) : null;
   };
 
+  // Copies the document, or a link to its replay, with the recording in the link.
+  const share = async (what: "message" | "link") => {
+    setMenu(null);
+    const doc = currentDoc().then((d) => {
+      if (!d) throw new Error("no document");
+      return d;
+    });
+    try {
+      const n = await (what === "message" ? copyMessage(doc) : copyLink(doc));
+      const size = n < 1000 ? `${n} characters` : `${(n / 1000).toFixed(1)}k characters`;
+      setSaveErr(null);
+      setSaveMsg(
+        n > 40_000
+          ? `Copied. The link is long (${size}); some email and chat apps may cut it.`
+          : what === "message"
+            ? `Copied, with a replay link (${size})`
+            : `Replay link copied (${size})`,
+      );
+    } catch (e) {
+      setSaveErr(`Could not copy: ${(e as Error).message}`);
+    }
+  };
+
   const counts = useMemo(() => {
     const r = rec.current;
     const c: Record<Src, number> = { t: 0, p: 0, c: 0, x: 0, o: 0, k: 0 };
@@ -299,6 +323,23 @@ export function EditorPage() {
                 </button>
                 <button className="menu-item" onClick={async () => { setMenu(null); const d = await currentDoc(); if (d) exportMd(d); }}>
                   Markdown (.md)
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="menu-wrap" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setMenu(menu === "share" ? null : "share")} aria-haspopup="menu">
+              Share ▾
+            </button>
+            {menu === "share" && (
+              <div className="menu" role="menu">
+                <button className="menu-item" onClick={() => share("message")}>
+                  Copy with replay link
+                  <span className="muted small">The text, with a small link at the end to watch it being written. Paste it into an email or a chat.</span>
+                </button>
+                <button className="menu-item" onClick={() => share("link")}>
+                  Copy replay link
+                  <span className="muted small">The whole recording is in the link; nothing is uploaded.</span>
                 </button>
               </div>
             )}

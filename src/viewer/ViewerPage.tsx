@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { ProvDoc } from "../prov/format";
+import { SRC_LABEL, type ProvDoc, type Src } from "../prov/format";
 import { loadDoc } from "../storage";
-import { fmtClock } from "../util";
+import { exportDoc, fmtClock } from "../util";
+import { decodeLink } from "../prov/link";
+import { MatchCheck } from "./MatchCheck";
 import { isRecordingFile, parseRecording } from "../prov/log";
 import { analyze, type Analysis } from "./analyze";
 import { ProjectView, type NamedRecording } from "./ProjectView";
@@ -14,10 +16,13 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
+  // Opened from a replay link, which carries the recording.
+  const [fromLink, setFromLink] = useState(false);
 
   const load = async (doc: ProvDoc, md: string | null) => {
     setErr(null);
     setProject(null);
+    setFromLink(false);
     setA(await analyze(doc, md));
     setLoads((n) => n + 1);
   };
@@ -25,9 +30,17 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
   useEffect(() => {
     const local = params.get("local");
     const url = params.get("url");
+    const z = params.get("z");
     setA(null);
     setProject(null);
-    if (local) {
+    if (z) {
+      setBusy(true);
+      decodeLink(z)
+        .then((doc) => load(doc, null))
+        .then(() => setFromLink(true))
+        .catch((e) => setErr(`Could not open this replay link: ${(e as Error).message}`))
+        .finally(() => setBusy(false));
+    } else if (local) {
       const doc = loadDoc(local);
       if (doc) void load(doc, null);
       else setErr("That document is not in this browser's storage.");
@@ -122,8 +135,8 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
           {busy && <p className="muted">Loading…</p>}
           {err && <p className="error">{err}</p>}
           <p className="muted small">
-            To share a replay link, host the <code>.md.awh.jsonl</code> file somewhere that allows cross-origin requests (for example a GitHub gist, raw
-            URL) and link to <code>{location.origin + location.pathname}#/view?url=…</code>
+            To share a replay, use Share in the editor, which puts the whole recording in the link. To link to a recording hosted somewhere that
+            allows cross-origin requests (for example a GitHub gist, raw URL), use <code>{location.origin + location.pathname}#/view?url=…</code>
           </p>
         </div>
       </div>
@@ -135,12 +148,27 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
         a={a}
         err={err}
         replayKey={loads}
-        headerAction={
-          <label className="button">
-            Open another…
-            <input type="file" accept=".jsonl,.json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
-          </label>
+        intro={
+          fromLink && (
+            <p className="link-intro small">
+              Someone shared this with you to show how it was written. The replay below plays back its writing, keystroke by keystroke, as recorded
+              by the <a href="#/about">arewehuman</a> editor. Deleted text was never recorded.
+            </p>
+          )
         }
+        headerAction={
+          fromLink ? (
+            <button onClick={() => exportDoc(a.doc)} title="Save the recording (.md.awh.jsonl) that this link carries">
+              Download recording
+            </button>
+          ) : (
+            <label className="button">
+              Open another…
+              <input type="file" accept=".jsonl,.json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
+            </label>
+          )
+        }
+        footer={fromLink && <MatchCheck text={a.doc.text} />}
       />
     </div>
   );
@@ -153,22 +181,29 @@ export function ViewerBody({
   replayKey,
   headerAction,
   start,
+  intro,
+  footer,
 }: {
   a: Analysis;
   err?: string | null;
   replayKey?: number | string;
   headerAction?: ReactNode;
   start?: number;
+  intro?: ReactNode;
+  footer?: ReactNode;
 }) {
   return (
     <div className="viewer">
       <header className="viewer-head">
         <div>
           <h1>{a.doc.title || "Untitled"}</h1>
-          <div className="muted small">Started {fmtClock(a.doc.t0)}</div>
+          <div className="muted small">
+            Started {fmtClock(a.doc.t0)} · {sourceSummary(a)}
+          </div>
         </div>
         {headerAction}
       </header>
+      {intro}
       <ul className="checks small">
         {a.checks.map((c, i) => (
           <li key={i} className={c.ok ? "ok" : "fail"}>
@@ -179,6 +214,21 @@ export function ViewerBody({
       </ul>
       {err && <p className="error">{err}</p>}
       {a.tl && <Replay key={replayKey} a={a} start={start} />}
+      {footer}
     </div>
   );
+}
+
+// "1,234 characters: 97% typed, 3% pasted", over the final text.
+function sourceSummary(a: Analysis) {
+  const n: Partial<Record<Src, number>> = {};
+  for (const id of a.res.live) {
+    const s = a.res.chars[id].src;
+    n[s] = (n[s] ?? 0) + 1;
+  }
+  const total = a.res.live.length;
+  const parts = (Object.entries(n) as [Src, number][])
+    .sort((x, y) => y[1] - x[1])
+    .map(([s, k]) => `${k === total ? 100 : Math.min(99, Math.max(1, Math.round((100 * k) / total)))}% ${SRC_LABEL[s]}`);
+  return `${total.toLocaleString()} characters` + (parts.length ? `: ${parts.join(", ")}` : "");
 }

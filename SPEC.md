@@ -103,6 +103,20 @@ A file is consistent if
 4. `textSha256` is the SHA-256 of `text`, and the chain and seal recompute as above,
 5. if a `.md` file accompanies it, that file's text (after normalizing line breaks) equals `text`.
 
+## Replay links
+
+A recording can travel inside a link to the replay page, `…/#/view?z=<payload>`, so that it can be shared without hosting a file. The payload is in the URL fragment, which browsers do not send to the server, so the recording never leaves the sender's and the reader's browsers.
+
+The payload is the recording file in a *packed* form, compressed with gzip and encoded as base64url without padding. Packing makes these changes, all reversible, that together roughly halve the size of the link:
+
+1. the header gets `"packed": 1`,
+2. the time of each event is replaced by its difference from the time of the previous event (the first event keeps its own time),
+3. each checkpoint line is written as `{"checkpoint":""}`, without its hash.
+
+To unpack, the reader adds the times back up and recomputes each checkpoint hash from the events, as in "Hash chain". The seal is kept, and it depends on every checkpoint hash, so a packed recording verifies exactly as the file does, and any change to an event or to the text makes the seal fail. Leaving out the intermediate hashes loses nothing for a reader who has only this recording; they matter only for comparison with hashes recorded elsewhere, as with signed checkpoints (below). Unpacking gives back the file byte for byte.
+
+With typical typing, a link holds about 10 characters per character of the final text (for example, 26,000 for a post of 2,600 characters, written with edits).
+
 ## Future work
 
 Two additions are planned, neither of which changes the privacy property that deleted text is never disclosed.

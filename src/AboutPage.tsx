@@ -27,6 +27,11 @@ export function AboutPage() {
         replays the log, checks that it reproduces the text exactly, checks the hash chain, and plays back the writing of the document at a
         choice of speeds.
       </p>
+      <p>
+        A recording can also be shared as a link that holds the whole recording, so nothing needs to be hosted (Share in the editor). The
+        recording is in the part of the link after <code>#</code>, which browsers do not send to any server. Share can also copy the text
+        itself with a small link at the end to its replay, to paste into an email or a chat.
+      </p>
       <h2>What this does and does not show</h2>
       <p>
         A consistent history with human keystroke timing is reasonable evidence that the text was typed by a person. It is not a proof.
@@ -34,6 +39,11 @@ export function AboutPage() {
         AI-generated text by hand. The hash chain detects later edits to a file but not a history that was fabricated from the start. We intend
         to add server-signed timestamps, which would show that a history grew in real time, but even that cannot distinguish a person typing
         their own words from a person transcribing someone else's.
+      </p>
+      <p>
+        A replay link also shows only how the recorded text was written. It does not show that this is the text in the message it came with,
+        since anyone could put a link to one recording under a different message. The replay page lets a reader paste the message they
+        received and compare.
       </p>
       <p>
         Note also that keystroke timing is somewhat identifying: the rhythm of a person's typing can be used to recognize them. Share

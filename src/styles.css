@@ -148,6 +148,13 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .dropzone code { overflow-wrap: anywhere; }
 .viewer-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .viewer-head h1 { font-family: var(--serif); margin: 0 0 4px; font-size: 28px; overflow-wrap: anywhere; }
+.link-intro { margin: 12px 0 0; padding: 10px 14px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); max-width: 72ch; }
+.match-check { margin-top: 20px; max-width: 72ch; }
+.match-check summary { cursor: pointer; color: var(--link); }
+.match-check textarea { width: 100%; box-sizing: border-box; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+.match.ok { color: var(--ok); }
+.match.fail { color: var(--error); }
+.match.fail .small { color: var(--text); }
 .checks { list-style: none; padding: 0; margin: 10px 0 16px; display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .checks .ok { color: var(--ok); }
 .checks .fail { color: var(--error); }
