@@ -43,7 +43,7 @@ function timing(events: ProvDoc["events"], key: string) {
   return ct;
 }
 
-const fmt = (ms: number) => {
+export const fmtTime = (ms: number) => {
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -51,12 +51,13 @@ const fmt = (ms: number) => {
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 };
 
-// Plays from the start, or, given `start`, shows the document after the first
-// `start` events, paused.
-export function Replay({ a, start }: { a: Analysis; start?: number }) {
+// The state of a replay: plays from the start, or, given `start`, shows the
+// document after the first `start` events, paused. The text is rendered into
+// `textRef`, which is scrolled to follow the caret.
+export function useReplay(a: Analysis, start?: number) {
   const { doc, tl, res } = a;
   const events = doc.events;
-  const [speed, setSpeed] = useState("normal");
+  const [speed, setSpeedKey] = useState("normal");
   const ct = useMemo(() => timing(events, speed), [events, speed]);
   const total = events.length ? ct[events.length - 1] : 0;
   const [pos, setPos] = useState(() => (start ? ct[Math.min(start, events.length) - 1] : 0));
@@ -115,10 +116,11 @@ export function Replay({ a, start }: { a: Analysis; start?: number }) {
       let j = i + 1;
       while (j < live.length && j !== caret && tl.finalIndex[live[j]] >= 0 === known && hl(live[j]) === untyped) j++;
       const cls = [!known && "ghost", untyped && "untyped"].filter(Boolean).join(" ");
+      const tip = !known ? "Deleted later (its content was not recorded)" : untyped ? "Not typed" : "";
       let s = "";
       if (known) for (let m = i; m < j; m++) s += doc.text[tl.finalIndex[live[m]]];
       else for (let m = i; m < j; m++) s += res.chars[live[m]].nl ? "\n" : "░";
-      parts.push(cls ? `<span class="${cls}">${escapeHtml(s)}</span>` : escapeHtml(s));
+      parts.push(cls ? `<span class="${cls}" title="${tip}">${escapeHtml(s)}</span>` : escapeHtml(s));
       i = j;
     }
     return parts.join("");
@@ -132,57 +134,73 @@ export function Replay({ a, start }: { a: Analysis; start?: number }) {
   }, [html, playing]);
 
   const done = pos >= total && total > 0;
-  const end = events[events.length - 1]?.[1] ?? 0;
+  return {
+    textRef,
+    playing,
+    done,
+    pos,
+    total,
+    speed,
+    // Recorded times of the current and last events.
+    now: events[k - 1]?.[1] ?? 0,
+    end: events[events.length - 1]?.[1] ?? 0,
+    toggle: () => {
+      if (!playing && done) setPos(0);
+      setPlaying(!playing);
+    },
+    seek: (p: number) => {
+      setPlaying(false);
+      setPos(p);
+    },
+    setSpeed: (key: string) => {
+      // Keep the same point in the writing when the speed changes.
+      const next = timing(events, key);
+      setPos(done ? next[events.length - 1] : next[Math.max(0, k - 1)]);
+      setSpeedKey(key);
+    },
+  };
+}
+
+export function Replay({ a, start }: { a: Analysis; start?: number }) {
+  const r = useReplay(a, start);
   return (
     <div className="replay">
       <div className="replay-controls">
-        <button
-          className="primary replay-play"
-          onClick={() => {
-            if (!playing && done) setPos(0);
-            setPlaying(!playing);
-          }}
-        >
-          {playing ? "❚❚ Pause" : done ? "↺ Replay" : "▶ Play"}
+        <button className="primary replay-play" onClick={r.toggle}>
+          {r.playing ? "❚❚ Pause" : r.done ? "↺ Replay" : "▶ Play"}
         </button>
         <input
           type="range"
           className="replay-seek"
           min={0}
-          max={total}
+          max={r.total}
           step="any"
-          value={pos}
+          value={r.pos}
           aria-label="Replay position"
-          onChange={(e) => {
-            setPlaying(false);
-            setPos(Number(e.target.value));
-          }}
+          onChange={(e) => r.seek(Number(e.target.value))}
         />
         <span className="replay-clock">
-          {fmt(events[k - 1]?.[1] ?? 0)} / {fmt(end)}
+          {fmtTime(r.now)} / {fmtTime(r.end)}
         </span>
-        <select
-          value={speed}
-          aria-label="Replay speed"
-          onChange={(e) => {
-            // Keep the same point in the writing when the speed changes.
-            const next = timing(events, e.target.value);
-            setPos(done ? next[events.length - 1] : next[Math.max(0, k - 1)]);
-            setSpeed(e.target.value);
-          }}
-        >
-          {SPEEDS.map(([v, l]) => (
-            <option key={v} value={v}>
-              {l}
-            </option>
-          ))}
-        </select>
+        <SpeedSelect value={r.speed} onChange={r.setSpeed} />
       </div>
-      <div className="replay-text" ref={textRef} />
+      <div className="replay-text" ref={r.textRef} />
       <p className="replay-note muted small">
         <span className="untyped">Highlighted</span> text was not typed. <span className="ghost">░░</span> marks text that was later deleted;
         its content was never recorded, apart from where its line breaks were. Long pauses are shortened.
       </p>
     </div>
+  );
+}
+
+export function SpeedSelect({ value, onChange, className }: { value: string; onChange: (key: string) => void; className?: string }) {
+  return (
+    <select className={className} value={value} aria-label="Replay speed" onChange={(e) => onChange(e.target.value)}>
+      {SPEEDS.map(([v, l]) => (
+        <option key={v} value={v}>
+          {l}
+        </option>
+      ))}
+    </select>
   );
 }

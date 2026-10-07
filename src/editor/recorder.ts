@@ -76,6 +76,10 @@ export class Recorder {
   src: Src[] = []; // by id
   alive: boolean[] = []; // by id
   clip: Clip | null = null;
+  // When an edit last deleted all of the text: the number of ids created by
+  // then, so that every character with a smaller id is from before. Null if it
+  // has not happened in this session.
+  emptiedAt: number | null = null;
   private seq: number[]; // live ids plus this session's tombstones, in document order
   private mem = new Map<number, { ch: string; n: number }>(); // this session's tombstones: value and deletion order
   private nDeleted = 0;
@@ -167,6 +171,7 @@ export class Recorder {
       pool.unshift(...ids.map((id, j) => ({ id, ch: txt[j] })));
       this.events.push(["d", t, c.fromA, n]);
     }
+    if (pool.length && !this.live.length) this.emptiedAt = this.src.length;
 
     // Then insertions, first to last; fromB is the position once earlier ones are in.
     for (const c of changes) {

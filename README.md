@@ -30,6 +30,8 @@ Deletions, undo/redo, and moves (cut and paste within the document, drag and dro
 
 To recognize its own cuts, the editor puts a random nonce on the clipboard next to the plain text, under a type that other applications ignore, so copied text pastes normally anywhere else. A cut pasted back into the same document is then a move even after a reload. Text pasted from another document, including another recorded one, counts as pasted, since its history is not part of this document's. See "Copy and paste" in [SPEC.md](SPEC.md).
 
+If all of the text is deleted, for example to write a different document in its place, the editor offers to start the document over from that point, so that its recording does not open with a document that no longer exists. See "Starting over" in [SPEC.md](SPEC.md).
+
 The values of deleted characters are held in memory only for the current session (to support undo) and are never written to the log, to browser storage, or to exported files. The history does show that a passage of a given length existed at a given place and time, and where its line breaks were, so that a replay keeps the line structure of deleted text (which matters most for code).
 
 ## Replaying
@@ -38,7 +40,7 @@ The Replay page accepts a `.md.awh.jsonl` recording (optionally with its `.md` f
 
 To see who wrote what in a document edited in several workspaces (see below), drop all of its recordings on the Replay page together, with or without the `.md` file.
 
-A recording can also be shared as a link that carries the whole recording in the URL fragment (gzipped, base64url), so nothing is uploaded or hosted: in the editor, Share › Copy replay link. Share › Copy with replay link copies the text itself, rendered, with a small "✎ written by a human" link at the end, ready to paste into an email or a chat. A reader who opens such a link can paste the message they received to check that it is the recorded text. Links hold about 10 characters per character of text, so they suit messages and short documents better than long ones. See "Replay links" in [SPEC.md](SPEC.md).
+A recording can also be shared as a link that carries the whole recording in the URL fragment (gzipped, base64url), so nothing is uploaded or hosted: in the editor, Share › Copy replay link. Share › Copy with replay link copies the text itself, rendered, with a small "✎ written by a human" link at the end, ready to paste into an email or a chat. Such a link opens on the replay alone; an info button shows what the replay means, the verification checks, a download of the recording, and a place to paste the message received to check that it is the recorded text. Links hold about 10 characters per character of text, so they suit messages and short documents better than long ones. See "Replay links" in [SPEC.md](SPEC.md).
 
 A hosted recording can be linked directly as `https://magland.github.io/arewehuman/#/view?url=<url of the .md.awh.jsonl>`, provided the host allows cross-origin requests (a raw GitHub gist URL works).
 

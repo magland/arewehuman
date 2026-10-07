@@ -10,6 +10,7 @@ import { isRecordingFile, parseRecording } from "../prov/log";
 import { renderMarkdown } from "../markdown";
 import { replay } from "../prov/replay";
 import { verifyChain } from "../prov/chain";
+import { lastRestartPoint, restartAt } from "../prov/restart";
 import { SRC_LABEL, type ProvDoc, type Src } from "../prov/format";
 
 function pref(k: string, dflt: boolean) {
@@ -64,6 +65,11 @@ export function EditorPage() {
   const [showPreview, setShowPreview] = useState(() => pref("preview", true));
   const [showSources, setShowSources] = useState(() => pref("sources", true));
   const [dragging, setDragging] = useState(false);
+  // After all of the text is deleted, an offer to start over from there (see
+  // restart.ts), so that the recording does not open with a document that is
+  // gone. Holds the recorder's emptiedAt while the offer is shown.
+  const [emptied, setEmptied] = useState<number | null>(null);
+  const declined = useRef<number | null>(null);
   const wide = useWide();
   const previewOn = showPreview && wide;
   const showSourcesRef = useRef(showSources);
@@ -86,6 +92,10 @@ export function EditorPage() {
     textTimer.current = window.setTimeout(() => {
       setText(view.current?.state.doc.toString() ?? "");
       setTick((t) => t + 1);
+      // Offered until declined, or until undo brings back text from before.
+      const r = rec.current;
+      const e = r?.emptiedAt ?? null;
+      setEmptied(r && e !== null && e !== declined.current && r.live.every((id) => id >= e) ? e : null);
     }, 150);
   }, [save]);
 
@@ -96,6 +106,7 @@ export function EditorPage() {
       r.docKey = id;
       rec.current = r;
       docId.current = id;
+      setEmptied(null);
       titleRef.current = t;
       setTitle(t);
       setText(initialText);
@@ -186,6 +197,31 @@ export function EditorPage() {
   const currentDoc = async (): Promise<ProvDoc | null> => {
     const r = rec.current, v = view.current;
     return r && v ? r.toDoc(v.state.doc.toString(), titleRef.current) : null;
+  };
+
+  // Replaces this document's recording with one that starts when all of the
+  // text was deleted, keeping what was written since.
+  const startOver = async () => {
+    const id = docId.current, v = view.current;
+    if (!id || !v) return;
+    window.clearTimeout(saveTimer.current);
+    try {
+      if (!v.state.doc.length) {
+        deleteDoc(id);
+        mount(id, Recorder.fresh(Date.now()), "", titleRef.current);
+        return;
+      }
+      const doc = await currentDoc();
+      const k = doc ? lastRestartPoint(doc) : 0;
+      if (!doc || !k) throw new Error("text from before was brought back");
+      const err = saveDoc(id, await restartAt(doc, k));
+      if (err) throw new Error(err);
+      const caret = v.state.selection.main.head;
+      if (openLocal(id)) view.current?.dispatch({ selection: { anchor: caret }, scrollIntoView: true });
+    } catch (e) {
+      setEmptied(null);
+      alert(`Could not start over: ${(e as Error).message}`);
+    }
   };
 
   // Copies the document, or a link to its replay, with the recording in the link.
@@ -356,6 +392,25 @@ export function EditorPage() {
           </button>
         </div>
       </div>
+      {emptied !== null && (
+        <div className="notice" role="status">
+          <span>All of the text was deleted. Start a new document from here, without the history of the deleted text?</span>
+          <span className="notice-actions">
+            <button className="primary" onClick={startOver}>
+              Start new document
+            </button>
+            <button
+              onClick={() => {
+                declined.current = emptied;
+                setEmptied(null);
+                view.current?.focus();
+              }}
+            >
+              Keep history
+            </button>
+          </span>
+        </div>
+      )}
       <input ref={fileInput} type="file" accept=".jsonl,.json,.md,.markdown,.txt" multiple hidden onChange={(e) => onFiles(e.target.files)} />
       <div className={"panes" + (previewOn ? " split" : "")}>
         <div className="editor-host" ref={host} />

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { EditorPage } from "./editor/EditorPage";
-import { ViewerPage } from "./viewer/ViewerPage";
+import { isSharedLink, ViewerPage } from "./viewer/ViewerPage";
 import { AboutPage } from "./AboutPage";
 
 function parseHash() {
@@ -17,6 +17,13 @@ export function App() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
   const page = route.path.startsWith("/view") ? "view" : route.path.startsWith("/about") ? "about" : "write";
+  // A shared replay link opens on the replay alone, without the app around it.
+  if (page === "view" && isSharedLink(route.params))
+    return (
+      <div className="app">
+        <ViewerPage params={route.params} />
+      </div>
+    );
   return (
     <div className="app">
       <nav className="topnav">
