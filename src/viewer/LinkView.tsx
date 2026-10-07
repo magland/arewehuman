@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import { exportDoc, fmtClock } from "../util";
 import type { Analysis } from "./analyze";
-import { MatchCheck } from "./MatchCheck";
 import { fmtTime, SpeedSelect, useReplay } from "./Replay";
 import { sourceSummary } from "./ViewerPage";
 import { AgainIcon, PauseIcon, PlayIcon } from "./icons";
@@ -90,7 +89,6 @@ export function LinkView({ a, download }: { a: Analysis; download: boolean }) {
               </li>
             ))}
           </ul>
-          <MatchCheck text={a.doc.text} />
           <div className="lv-actions">
             {download && (
               <button onClick={() => exportDoc(a.doc)} title="Save the recording (.md.awh.jsonl) that this link carries">

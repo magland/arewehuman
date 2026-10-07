@@ -5,6 +5,7 @@ import { CLIP_MIME, clipPayload, MemoryClips, parseClipPayload } from "../../src
 import { SRC_LABEL, type ProvDoc, type Src } from "../../src/prov/format";
 import { bodyLines, finalLine, LOG_SUFFIX, parseLog, parseRecording, serializeLog } from "../../src/prov/log";
 import { sha256 } from "../../src/prov/chain";
+import { lastRestartPoint, restartAt } from "../../src/prov/restart";
 import { bodyOf, Session, type OnDisk } from "./session";
 import { Typing } from "./typing";
 import { adoptOrphan, autoPatterns, autoRecorded, configUri, findOrphan, findRoot, readConfig, writeConfig, gitHead, initPlaces, mdOf, moveRecordings, othersOf, placeOf, projectRecordings, STORE } from "./places";
@@ -283,6 +284,7 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   session.rec.project = place.project;
   session.rec.clips = clips;
   session.rec.docKey = key;
+  offered.set(session, session.rec.emptiedAt);
   sessions.set(key, session);
   typing.enable();
   if (create) {
@@ -301,6 +303,66 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   }
   refresh();
   return session;
+}
+
+// Starting over (see "Starting over" in SPEC.md). When an edit deletes all of
+// a file's recorded text, the recording is offered to start over from that
+// point, so that it does not open with a document that is gone. Holds, per
+// session, the recorder's emptiedAt that was last offered.
+const offered = new WeakMap<Session, number | null>();
+
+function offerRestart(s: Session) {
+  const e = s.rec.emptiedAt;
+  if (e === null || offered.get(s) === e) return;
+  offered.set(s, e);
+  void vscode.window
+    .showInformationMessage(
+      `arewehuman: all of the text of ${baseName(s.document.uri)} was deleted. Start its recording over from here, without the history of the deleted text?`,
+      "Start Over",
+      "Keep History",
+    )
+    .then((choice) => {
+      if (choice === "Start Over") void restart(s);
+    });
+}
+
+async function restart(s: Session) {
+  const key = s.document.uri.toString();
+  try {
+    if (sessions.get(key) !== s || s.document.isClosed) throw new Error("the file is no longer being recorded");
+    const e = s.rec.emptiedAt;
+    if (e === null || !s.rec.live.every((id) => id >= e)) throw new Error("text from before was brought back");
+    const head = () => gitHead(s.document.uri);
+    let rec: Recorder;
+    let text = "";
+    if (!s.rec.live.length) rec = Recorder.fresh(Date.now(), "", head());
+    else {
+      const doc = await s.toDoc();
+      const k = lastRestartPoint(doc);
+      if (!k) throw new Error("text from before was brought back");
+      const out = await restartAt(doc, k);
+      rec = Recorder.resume(out, Date.now());
+      text = out.text;
+    }
+    if (sessions.get(key) !== s) throw new Error("the file is no longer being recorded");
+    await writes.get(s);
+    clearTimeout(persistTimers.get(s));
+    persistTimers.delete(s);
+    const n = new Session(s.document, rec, text, head);
+    n.log = s.log;
+    n.rec.project = s.rec.project;
+    n.rec.clips = clips;
+    n.rec.docKey = key;
+    offered.set(n, n.rec.emptiedAt);
+    sessions.set(key, n);
+    // The recording file is rewritten whole: at once if the file is saved,
+    // else when it is next saved (until then the unsaved store holds it).
+    if (s.document.isDirty) await persist(n);
+    else await writeLog(n);
+    refresh();
+  } catch (err) {
+    vscode.window.showWarningMessage(`arewehuman: could not start the recording of ${baseName(s.document.uri)} over (${(err as Error).message}).`);
+  }
 }
 
 function stop(doc: vscode.TextDocument) {
@@ -550,6 +612,7 @@ export function activate(ctx: vscode.ExtensionContext) {
       // will follow. (The event's isDirty still describes the document before
       // the change, so the file itself is compared.)
       if (cause === "other" || cause === "undo") void writeIfSaved(s);
+      offerRestart(s);
       refresh();
     }),
     // The recording is written just before the file is saved, so the two match.
