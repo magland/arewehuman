@@ -7,7 +7,7 @@ import { AgainIcon, PauseIcon, PlayIcon } from "./icons";
 
 // The page a shared link opens (#/view?z= or ?url=): the replay and little
 // else. What it shows, and the checks, are behind the info button.
-export function LinkView({ a, download }: { a: Analysis; download: boolean }) {
+export function LinkView({ a, fromLink }: { a: Analysis; fromLink: boolean }) {
   const r = useReplay(a);
   const info = useRef<HTMLDialogElement>(null);
   const ok = a.checks.every((c) => c.ok);
@@ -69,6 +69,12 @@ export function LinkView({ a, download }: { a: Analysis; download: boolean }) {
             This is a replay of the writing of this text, keystroke by keystroke, as recorded by the arewehuman editor. Deleted text was never
             recorded.
           </p>
+          {fromLink && (
+            <p className="small">
+              Nothing was uploaded to a server or to the cloud. The whole message and its recording are contained in the link itself, and this
+              page decodes them in your browser.
+            </p>
+          )}
           <ul className="lv-legend small">
             <li>
               <span className="untyped">Highlighted</span> text was not typed (pasted, or inserted another way).
@@ -90,7 +96,7 @@ export function LinkView({ a, download }: { a: Analysis; download: boolean }) {
             ))}
           </ul>
           <div className="lv-actions">
-            {download && (
+            {fromLink && (
               <button onClick={() => exportDoc(a.doc)} title="Save the recording (.md.awh.jsonl) that this link carries">
                 Download recording
               </button>

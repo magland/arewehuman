@@ -102,7 +102,7 @@ export function ViewerPage({ params }: { params: URLSearchParams }) {
   };
 
   if (shared) {
-    if (a) return <LinkView key={loads} a={a} download={fromLink} />;
+    if (a) return <LinkView key={loads} a={a} fromLink={fromLink} />;
     return (
       <div className="lv-status">
         {err ? <p className="error">{err}</p> : <p className="muted">Loading…</p>}
