@@ -44,7 +44,7 @@ The extension API does not say what caused a change, so the extension infers the
 |---|---|
 | Move Line Up/Down, dragging a selection within the editor | An edit that removes exactly the characters it inserts is a move: the characters keep their ids. |
 | Cut and paste back in the same file | A move (restore of kind `m`), found through the clipboard nonce (below), including when the paste is in another place or the text was cut line-wise. A second paste of the same cut is a copy. |
-| Cut in one file, pasted back after a VS Code restart or in another window | `p`: the registry of copies lives in the window's extension host and is not kept. |
+| Cut in one file, pasted back after a VS Code restart or in another window | `p`. VS Code keeps the data a paste provider attaches to a copy (the nonce) only in the window's memory, and only for the latest copy, so such a paste arrives without it. Recognizing it anyway would mean keeping something derived from the cut text, such as a hash, which the extension does not store. |
 
 ## Copy and paste
 
@@ -73,14 +73,14 @@ On copy or cut, the paste provider puts a random nonce on VS Code's clipboard da
 | Paste of such text back into its first file | A move there if the cut characters are still deleted; otherwise a copy. |
 | Source file restarted (see "Starting over") | The recording gets a new id, so older references no longer resolve; the text shows as from another file. |
 
-## Duplicated lines
+## Duplicates made without the clipboard
 
 | Case | Handling |
 |---|---|
+| Dragging a selection with Ctrl held (a copy), Duplicate Selection | The extension keeps the editor's last selections. An edit that only inserts exactly the text that was selected just before, with no edit in between, is a copy of the selected characters: each gets the source of the character it copies (`c` for typed text). With several selections, each insertion is matched with its own. |
 | Copy Line Up/Down | VS Code does not say which command made an edit. An edit that only inserts whole lines next to the same lines is taken to be a copied line: each character gets the source of the line it copies (`c` for typed text), and the added line break gets the source of the copy as a whole. |
 | Duplicating an empty line | Not detected (the rule needs at least one character besides the line break); `o`. |
-| An outside change that happens to insert a copy of an adjacent line | Also taken to be a copied line. |
-| Copying a selection by dragging with Ctrl held | Not recognized as a copy; recorded as pasted or other. |
+| An outside change that happens to insert a copy of an adjacent line, or a copy of the selected text | Also taken to be a copy. |
 
 ## Drops
 
@@ -141,5 +141,5 @@ On copy or cut, the paste provider puts a random nonce on VS Code's clipboard da
 | Typed text, copies of typed text | Not highlighted. |
 | Pasted, imported, other | Highlighted by source. |
 | Text from another file (`k`) | Shown by its source in the file it came from, following further references: not highlighted if typed there, highlighted as pasted if pasted there, and so on. The other file's live recorder is used if it is open, else its recording is read from `.arewehuman` once. Shown as from another file (green) if that recording is not found. |
-| Status bar percentages | Counted the same way as the highlighting, so text from another file counts by its source there. The "typed" figure counts typed characters (here, or in the file they came from), not copies of them. |
+| Status bar percentages | Counted the same way as the highlighting, so text from another file counts by its source there. The "typed" figure in the status bar counts typed characters (here, or in the file they came from) and copies of them, since neither is highlighted; the tooltip gives each source separately. |
 | Highlighting off | "Toggle Highlighting of Non-Typed Text", or the `arewehuman.highlightNonTyped` setting. |

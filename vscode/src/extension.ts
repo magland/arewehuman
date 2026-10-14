@@ -430,10 +430,11 @@ function update() {
   const counts = s.counts(origins.shown(s.rec, s.log));
   const total = s.rec.live.length;
   const pct = (n: number) => (total ? Math.round((100 * n) / total) : 0);
-  status.text = `$(record) Recording · typed ${pct(counts.t)}%`;
+  // Copies of typed text are not highlighted, so they count as typed here.
+  status.text = `$(record) Recording · typed ${pct(counts.t + counts.c)}%`;
   const md = new vscode.MarkdownString();
   md.appendMarkdown(`**Recording ${baseName(s.document.uri)}** in \`${vscode.workspace.asRelativePath(s.log!)}\`, which is written when you save.\n\n`);
-  md.appendMarkdown(`${total.toLocaleString()} characters: ` + (["t", "p", "c", "k", "x", "o"] as Src[]).filter((k) => counts[k]).map((k) => `${SRC_LABEL[k]} ${pct(counts[k])}%`).join(", ") + "\n\n");
+  md.appendMarkdown(`${total.toLocaleString()} characters: ` + (["t", "p", "c", "k", "x", "o"] as Src[]).filter((k) => counts[k]).map((k) => `${SRC_LABEL[k]} ${pct(counts[k])}%`).join(", ") + (counts.c ? ". The typed figure in the status bar includes copies of typed text." : "") + "\n\n");
   if (!typing.owned)
     md.appendMarkdown("Another extension (such as a Vim emulator) handles typing, so typed text is recognized only approximately: any single character inserted in the focused editor counts as typed.\n\n");
   md.appendMarkdown("Click to show the replay. [Configure which files are recorded automatically](command:arewehuman.configureProject)");
@@ -692,6 +693,7 @@ export function activate(ctx: vscode.ExtensionContext) {
 
   ctx.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(refresh),
+    vscode.window.onDidChangeTextEditorSelection((e) => sessions.get(e.textEditor.document.uri.toString())?.noteSelection(e.selections)),
     vscode.window.onDidChangeVisibleTextEditors(refresh),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("arewehuman")) refresh();

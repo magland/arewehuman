@@ -31,6 +31,9 @@ export interface Hints {
   // For a paste: the nonce found on the clipboard (see clips.ts), null if the
   // clipboard had none, undefined if the paste event was not seen.
   pasteNonce?: string | null;
+  // What is being dragged from this editor, if anything: the ids of the
+  // dragged characters and their text, so that a drop of a copy is a copy.
+  dragged?: { ids: number[]; raw: string } | null;
 }
 
 // Text copied or cut from this document, kept in memory only.
@@ -44,8 +47,11 @@ export interface Clip {
 }
 
 // How an edit came about, as far as the editor can tell. A paste may also
-// carry the nonce found on the clipboard (see Hints.pasteNonce).
-export type Cause = "typed" | "paste" | "drop" | "copyline" | "undo" | "move" | "other";
+// carry the nonce found on the clipboard (see Hints.pasteNonce). "duplicate" is
+// a copy of text in the document made without the clipboard, such as a drag
+// with the copy modifier or Duplicate Selection; its changes give the ids they
+// copy in `copyOf`.
+export type Cause = "typed" | "paste" | "drop" | "copyline" | "duplicate" | "undo" | "move" | "other";
 
 // One replaced span. `fromA`/`toA` refer to the document before the edit,
 // `fromB` to the document once earlier changes of the same edit are applied.
@@ -60,6 +66,9 @@ export interface Change {
   // For a copied line (cause "copyline"): which side of the inserted text the
   // copied lines are on (see copiedLines).
   copied?: "before" | "after";
+  // For a copy made without the clipboard (cause "duplicate"): the ids of the
+  // characters it copies.
+  copyOf?: number[];
 }
 
 // For an insertion that duplicates whole lines next to it, as copying a line up
@@ -187,10 +196,16 @@ export class Recorder {
     tr.changes.iterChanges((fromA, toA, fromB, _toB, ins) =>
       changes.push({ fromA, toA, fromB, text: ins.toString(), removed: oldDoc.sliceString(fromA, toA) }),
     );
-    const cause = causeOf(tr, hints);
+    let cause = causeOf(tr, hints);
     if (cause === "copyline") {
       const text = tr.state.doc.toString();
       for (const c of changes) c.copied = copiedLines(text, c) ?? undefined;
+    }
+    // A selection of this document dropped as a copy (a move is "move.drop").
+    const ins = changes.filter((c) => c.text.length);
+    if (cause === "drop" && hints.dragged && ins.length === 1 && !ins[0].removed && ins[0].text === hints.dragged.raw && hints.dragged.ids.every((id) => this.alive[id])) {
+      cause = "duplicate";
+      ins[0].copyOf = hints.dragged.ids;
     }
     this.applyChanges(changes, t, cause, hints.pasteNonce);
   }
@@ -317,6 +332,7 @@ export class Recorder {
       const ids = before ? this.live.slice(c.fromB - n, c.fromB) : this.live.slice(c.fromB, c.fromB + n);
       return { ids: none(), ...this.copyPlan(T.length, ids, before ? [-1, ...ids] : [...ids, -1]), kind: "m" };
     }
+    if (cause === "duplicate" && c.copyOf) return { ids: none(), ...this.copyPlan(T.length, c.copyOf, lineUp(c.copyOf, T)), kind: "m" };
     const src: Src = cause === "drop" ? "p" : cause === "typed" ? "t" : "o";
     return { ids: none(), src, kind: "m" };
   }

@@ -63,7 +63,7 @@ On copy or cut, the editor puts a random nonce on the clipboard under `applicati
 | Case | Handling |
 |---|---|
 | Text dropped from another application | `p`. |
-| Selection dragged with the copy modifier (a copy rather than a move) | `p`: CodeMirror reports it as a drop, and it is not recognized as a copy. |
+| Selection dragged with the copy modifier (a copy rather than a move) | A copy: the editor notes what is dragged from it, and a drop of exactly that text, while its characters are still in the document, gets the source of each character it copies (`c` for typed text). |
 | A file dropped on the page or opened with Open | Not inserted. A `.md.awh.jsonl` recording opens as a document whose editing continues its history (a `.md` next to it is compared, and the recording's text is used if they differ; a recording whose chain does not verify opens with a warning; one whose events do not replay is refused). A `.md` or `.txt` file opens as a new document whose text is imported (`x`). `\r\n` line breaks become `\n`. |
 
 ## Saving and storage

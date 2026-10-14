@@ -25,6 +25,7 @@ function recordingPlugin(rec: Recorder, onChange: () => void) {
   let lastKey = -Infinity;
   let lastReplacement = -Infinity;
   let pasteNonce: string | null | undefined;
+  let dragged: { ids: number[]; raw: string } | null = null;
   const plugin = ViewPlugin.define((view) => {
     // CodeMirror's copy handler, on the content element, clears the clipboard
     // and puts the text on it. This listener, on the outer element, runs after
@@ -37,7 +38,7 @@ function recordingPlugin(rec: Recorder, onChange: () => void) {
     return {
       update(u: ViewUpdate) {
         const now = performance.now();
-        const hints = { typedOk: now - lastKey < KEY_WINDOW_MS, replacement: now - lastReplacement < 200, pasteNonce };
+        const hints = { typedOk: now - lastKey < KEY_WINDOW_MS, replacement: now - lastReplacement < 200, pasteNonce, dragged };
         for (const tr of u.transactions) {
           rec.apply(tr, Date.now() - rec.t0, hints);
           if (tr.isUserEvent("input.paste")) pasteNonce = undefined;
@@ -78,6 +79,16 @@ function recordingPlugin(rec: Recorder, onChange: () => void) {
       },
       cut: (_e, view) => {
         rec.captureClip(view.state, "cut");
+        return false;
+      },
+      // A drag from this editor: what is dragged, in case it is dropped as a copy.
+      dragstart: (_e, view) => {
+        const rs = view.state.selection.ranges.filter((r) => !r.empty);
+        dragged = rs.length ? { ids: rs.flatMap((r) => rec.live.slice(r.from, r.to)), raw: rs.map((r) => view.state.sliceDoc(r.from, r.to)).join("") } : null;
+        return false;
+      },
+      dragend: () => {
+        dragged = null;
         return false;
       },
       paste: (e: ClipboardEvent) => {

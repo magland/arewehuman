@@ -215,6 +215,29 @@ describe("recorder", () => {
     expect(h.rec.live.map((id) => h.rec.src[id]).join("")).toBe("cpp" + "tp");
   });
 
+  it("records a selection dropped as a copy as a copy", async () => {
+    const h = new Harness();
+    h.type("ab ");
+    h.paste("PQ", null);
+    const dragged = { ids: h.rec.live.slice(1, 5), raw: "b PQ" };
+    h.dispatch({ changes: { from: 5, insert: "b PQ" }, userEvent: "input.drop" }, { ...typed, dragged });
+    expect(h.srcString()).toBe("tttpp" + "ccpp");
+    // a drop of other text while dragging is pasted
+    h.dispatch({ changes: { from: 0, insert: "zz" }, userEvent: "input.drop" }, { ...typed, dragged });
+    expect(h.srcString().slice(0, 2)).toBe("pp");
+    await h.check();
+  });
+
+  it("records a copy made without the clipboard (Duplicate Selection) from the ids it copies", async () => {
+    const h = new Harness();
+    h.type("ab");
+    h.paste("PQ", null);
+    h.rec.applyChanges([{ fromA: 4, toA: 4, fromB: 4, text: "bP", removed: "", copyOf: h.rec.live.slice(1, 3) }], (h.t += 100), "duplicate");
+    expect(h.srcString()).toBe("ttpp" + "cp");
+    h.state = h.state.update({ changes: { from: 4, insert: "bP" } }).state;
+    await h.check();
+  });
+
   it("handles moves within one transaction (drag and drop)", async () => {
     const h = new Harness();
     h.type("abc def");

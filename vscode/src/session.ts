@@ -58,6 +58,9 @@ export class Session {
   readonly outsideChange: { del: number; ins: number } | null;
   // The state before the last edit, if that edit only deleted text (see captureCopy).
   private lastDeletion: { text: string; live: number[]; spans: string } | null = null;
+  // The non-empty selections, as spans of the recorded text, if they were
+  // last set after the last edit (see noteSelection).
+  private selected: [number, number][] | null = null;
   // The recording file, and its contents as this session last wrote or read
   // them (null if unknown).
   log: vscode.Uri | null = null;
@@ -97,8 +100,27 @@ export class Session {
     return this.split(this.text).front.length;
   }
 
+  // Notes the selections of an editor of the document, so that an edit that
+  // inserts copies of the selected text can be recognized (see onChange).
+  noteSelection(selections: readonly vscode.Selection[]) {
+    const text = this.document.getText();
+    const front = this.split(text).front.length;
+    const toBody = (p: vscode.Position) => {
+      const o = this.document.offsetAt(p);
+      return text.slice(front, Math.max(front, o)).replace(/\r\n/g, "\n").length;
+    };
+    const spans = selections
+      .filter((s) => !s.isEmpty)
+      .map((s): [number, number] => [toBody(s.start), toBody(s.end)])
+      .filter(([a, b]) => b > a)
+      .sort((x, y) => x[0] - y[0]);
+    this.selected = spans.length ? spans : null;
+  }
+
   onChange(e: vscode.TextDocumentChangeEvent, cause: Cause, pasteNonce?: string | null) {
     const old = this.text;
+    const selected = this.selected;
+    this.selected = null;
     this.text = e.document.getText();
     this.lastDeletion = e.contentChanges.every((c) => !c.text)
       ? { text: old, live: this.rec.live.slice(), spans: spansKey(e.contentChanges.map((c) => [c.rangeOffset, c.rangeOffset + c.rangeLength])) }
@@ -125,6 +147,16 @@ export class Session {
       if (sides.every((s) => s)) {
         changes.forEach((c, k) => (c.copied = sides[k]!));
         cause = "copyline";
+      }
+    }
+    if ((cause === "other" || cause === "drop") && selected && changes.length === selected.length) {
+      // Inserting exactly the text that was selected just before, as dragging
+      // a selection with the copy modifier or Duplicate Selection does, is a
+      // copy of it.
+      const before = this.bodyOf(old);
+      if (changes.every((c, k) => !c.removed && c.text === before.slice(...selected[k]))) {
+        changes.forEach((c, k) => (c.copyOf = this.rec.live.slice(...selected[k])));
+        cause = "duplicate";
       }
     }
     if ((cause === "other" || cause === "drop") && isMove(changes)) cause = "move";
