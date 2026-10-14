@@ -177,6 +177,7 @@ export class Recorder {
     for (const c of changes) {
       if (!c.text.length) continue;
       const { ids, src, kind, from } = this.classify(cause, c, pool, pasteNonce);
+      const srcAt = (k: number) => (typeof src === "string" ? src : src[k]);
       let pos = c.fromB;
       if (from) {
         // Characters from another recording: new ids here, with a reference.
@@ -193,7 +194,7 @@ export class Recorder {
       for (let i = 0; i < ids.length; ) {
         let j = i + 1;
         const restoring = ids[i] !== null;
-        while (j < ids.length && (ids[j] !== null) === restoring) j++;
+        while (j < ids.length && (ids[j] !== null) === restoring && (restoring || srcAt(j) === srcAt(i))) j++;
         if (restoring) {
           const run = ids.slice(i, j) as number[];
           this.events.push(["r", t, pos, kind, encodeRanges(run)]);
@@ -203,11 +204,11 @@ export class Recorder {
           const run: number[] = [];
           for (let k = 0; k < n; k++) {
             const id = this.src.length;
-            this.src.push(src);
+            this.src.push(srcAt(i));
             this.alive.push(false);
             run.push(id);
           }
-          this.events.push(insertEv(t, pos, c.text.slice(i, j), src));
+          this.events.push(insertEv(t, pos, c.text.slice(i, j), srcAt(i)));
           this.insertIds(pos, run);
         }
         pos += j - i;
@@ -231,13 +232,14 @@ export class Recorder {
     this.events.push(["g", Math.max(t, lastTime(this.events)), commit]);
   }
 
-  // Decides, for each inserted character, whether it restores a deleted id or is new.
+  // Decides, for each inserted character, whether it restores a deleted id or
+  // is new, and the source of new ones (one for all, or one per character).
   private classify(
     cause: Cause,
     c: Change,
     pool: { id: number; ch: string; used?: boolean }[],
     pasteNonce: string | null | undefined,
-  ): { ids: (number | null)[]; src: Src; kind: RestoreKind; from?: { rec: string; ids: number[] } } {
+  ): { ids: (number | null)[]; src: Src | Src[]; kind: RestoreKind; from?: { rec: string; ids: number[] } } {
     const T = c.text;
     const none = (): (number | null)[] => new Array(T.length).fill(null);
     if (cause === "undo") {
@@ -262,9 +264,17 @@ export class Recorder {
       }
       const internal =
         clip && (T === clip.raw || T === clip.clipText || T === clip.clipText + "\n" || clip.parts.includes(T));
-      return { ids: none(), src: (internal ? "c" : "p") as Src, kind: "m" as RestoreKind };
+      return { ids: none(), src: internal ? this.copySrcs(T.length, clip.ids) : ("p" as Src), kind: "m" as RestoreKind };
     }
-    const src: Src = cause === "drop" ? "p" : cause === "copyline" ? "c" : cause === "typed" ? "t" : "o";
+    if (cause === "copyline") {
+      // CodeMirror's copyLineDown inserts a line break and the lines just
+      // before it; copyLineUp inserts the lines just after it and a line break.
+      const n = T.length - 1;
+      const down = T.startsWith("\n") && c.fromB >= n;
+      const ids = down ? this.live.slice(c.fromB - n, c.fromB) : this.live.slice(c.fromB, c.fromB + n);
+      return { ids: none(), src: this.copySrcs(T.length, ids, down ? [-1, ...ids] : [...ids, -1]), kind: "m" as RestoreKind };
+    }
+    const src: Src = cause === "drop" ? "p" : cause === "typed" ? "t" : "o";
     return { ids: none(), src, kind: "m" as RestoreKind };
   }
 
@@ -291,7 +301,27 @@ export class Recorder {
       if (this.clip?.nonce === nonce) this.clip.kind = "copy";
       return { ids, src: "o" as Src, kind: "m" as RestoreKind };
     }
-    return { ids: none(), src: "c" as Src, kind: "m" as RestoreKind };
+    return { ids: none(), src: this.copySrcs(T.length, ids), kind: "m" as RestoreKind };
+  }
+
+  // The source of a copy, made within this document, of the character `id`. A
+  // copy of typed text is "c"; anything else keeps its source, so that copying
+  // pasted text does not make it look typed. A character from another file
+  // ("k") becomes pasted, since the copy does not refer to that file.
+  private copiedSrc(id: number): Src {
+    const s = this.src[id] ?? "p";
+    return s === "t" || s === "c" ? "c" : s === "k" ? "p" : s;
+  }
+
+  // Sources for `n` pasted characters that copy the characters `ids`. `at`
+  // gives the copied id of each pasted character, or -1 for one the editor
+  // added (such as a line break); by default the paste lines up one to one with
+  // `ids` if it has the same length. Characters that do not line up get the
+  // source of the copy as a whole: "c" if all of it was typed, else the first
+  // other source in it.
+  private copySrcs(n: number, ids: number[], at: number[] = ids.length === n ? ids : []): Src[] {
+    const all = ids.map((id) => this.copiedSrc(id)).find((s) => s !== "c") ?? "c";
+    return Array.from({ length: n }, (_, k) => (at[k] >= 0 ? this.copiedSrc(at[k]) : all));
   }
 
   // Undo/redo re-inserts text where it was deleted. Match it against this

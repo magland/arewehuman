@@ -22,7 +22,7 @@ Each character gets an implicit id, the time it was inserted (in milliseconds), 
 |---|---|
 | typed | inserted by an edit that immediately followed a keydown or IME composition step |
 | pasted | pasted or dropped from outside the document |
-| copied | pasted from a copy made within the same document |
+| copied | pasted from a copy of typed text made within the same document (a copy of pasted, imported or other text keeps that source) |
 | imported | present in a `.md` file that was opened without a recording |
 | other | anything else, such as dictation, autocorrect, or text inserted without a key event |
 

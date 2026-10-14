@@ -89,15 +89,16 @@ function recordingPlugin(rec: Recorder, onChange: () => void) {
   return [plugin, handlers];
 }
 
+// Copies of typed text ("c") are not tinted: the recorder gives copies of
+// anything else the source of what they copied.
 const srcMarks = {
   p: Decoration.mark({ class: "awh-src-p" }),
-  c: Decoration.mark({ class: "awh-src-c" }),
   k: Decoration.mark({ class: "awh-src-c" }), // from another file: shown like a copy
   x: Decoration.mark({ class: "awh-src-x" }),
   o: Decoration.mark({ class: "awh-src-o" }),
 };
 
-// Tints characters that were not typed.
+// Tints characters that were not typed (or copied from typed text).
 function sourceHighlight(rec: Recorder) {
   const build = (view: EditorView): DecorationSet => {
     const b = new RangeSetBuilder<Decoration>();

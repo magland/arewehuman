@@ -378,9 +378,10 @@ function stop(doc: vscode.TextDocument) {
 
 // Highlighting of non-typed text, and the status bar item.
 const alpha = { light: "42", dark: "61" }; // 26% and 38%, as in the web app
-const colors: Record<Exclude<Src, "t">, { light: string; dark: string }> = {
+// Copies of typed text ("c") are not highlighted; the recorder gives copies of
+// anything else the source of what they copied.
+const colors: Record<Exclude<Src, "t" | "c">, { light: string; dark: string }> = {
   p: { light: "#eb6834", dark: "#d95926" },
-  c: { light: "#1baf7a", dark: "#199e70" },
   x: { light: "#eda100", dark: "#c98500" },
   o: { light: "#e87ba4", dark: "#d55181" },
   k: { light: "#1baf7a", dark: "#199e70" }, // from another file: shown like a copy
@@ -394,7 +395,7 @@ const decorations = Object.fromEntries(
       rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
     }),
   ]),
-) as Record<Exclude<Src, "t">, vscode.TextEditorDecorationType>;
+) as Record<Exclude<Src, "t" | "c">, vscode.TextEditorDecorationType>;
 
 let status: vscode.StatusBarItem;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -407,8 +408,8 @@ function update() {
   const highlight = vscode.workspace.getConfiguration("arewehuman").get<boolean>("highlightNonTyped", true);
   for (const ed of vscode.window.visibleTextEditors) {
     const s = sessions.get(ed.document.uri.toString());
-    const ranges: Record<string, vscode.Range[]> = { p: [], c: [], x: [], o: [], k: [] };
-    if (s && highlight) for (const r of s.sourceRuns()) if (r.src !== "t") ranges[r.src].push(r.range);
+    const ranges: Record<string, vscode.Range[]> = { p: [], x: [], o: [], k: [] };
+    if (s && highlight) for (const r of s.sourceRuns()) ranges[r.src]?.push(r.range);
     for (const [src, deco] of Object.entries(decorations)) ed.setDecorations(deco, ranges[src]);
   }
 

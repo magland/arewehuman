@@ -48,7 +48,7 @@
         "arewehuman.highlightNonTyped": {
           "type": "boolean",
           "default": true,
-          "description": "Highlight text in recorded documents that was not typed (pasted, copied, imported or other)."
+          "description": "Highlight text in recorded documents that was not typed (pasted, imported, other, or from another file)."
         },
         "arewehuman.workspaceName": {
           "type": "string",

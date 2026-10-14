@@ -5,7 +5,7 @@ export const FORMAT = "arewehuman";
 export const FORMAT_VERSION = 2;
 
 // Source of a character, fixed when the character is first created.
-//  t: typed       p: pasted (from outside the document)   c: copied from within the document
+//  t: typed       p: pasted (from outside the document)   c: copied from typed text within the document
 //  x: imported    o: other (dictation, autocorrect, unknown)
 //  k: moved or copied from another recording of the same workspace, in a
 //     .arewehuman project; set only by "k" events

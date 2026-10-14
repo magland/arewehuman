@@ -157,6 +157,45 @@ describe("recorder", () => {
     await h.check();
   });
 
+  it("gives a copy within the document the source of what it copied", async () => {
+    const h = new Harness();
+    h.type("ab ");
+    h.paste("PQ", null);
+    expect(h.srcString()).toBe("tttpp");
+    // typed and pasted text copied together, pasted one to one
+    h.select(1, 5);
+    h.copy();
+    h.select(5, 5);
+    h.paste("b PQ", null);
+    expect(h.srcString()).toBe("tttpp" + "ccpp");
+    // deleting the original does not make the copy of pasted text look typed
+    h.select(3, 5);
+    h.dispatch({ changes: { from: 3, to: 5 }, userEvent: "delete.selection" });
+    expect(h.text()).toBe("ab b PQ");
+    expect(h.srcString()).toBe("ttt" + "ccpp");
+    // a copy of a copy of typed text is still "c"
+    h.select(3, 5);
+    h.copy();
+    h.select(7, 7);
+    h.paste("b ", null);
+    expect(h.srcString()).toBe("tttccppcc");
+    await h.check();
+  });
+
+  it("gives duplicated lines the source of the lines they copy", async () => {
+    const h = new Harness();
+    h.type("ab");
+    h.paste("PQ", null);
+    // copyLineDown: a line break and the line, after it
+    h.dispatch({ changes: { from: 4, insert: "\nabPQ" }, userEvent: "input.copyline" });
+    expect(h.text()).toBe("abPQ\nabPQ");
+    expect(h.srcString()).toBe("ttpp" + "pccpp");
+    // copyLineUp: the line and a line break, before it
+    h.dispatch({ changes: { from: 0, insert: "abPQ\n" }, userEvent: "input.copyline" });
+    expect(h.srcString()).toBe("ccppp" + "ttpp" + "pccpp");
+    await h.check();
+  });
+
   it("handles moves within one transaction (drag and drop)", async () => {
     const h = new Harness();
     h.type("abc def");
@@ -263,6 +302,28 @@ describe("recorder", () => {
       // pasting it again is a copy
       h.paste("one ", nonce);
       expect(h.srcString()).toBe("ttttttttcccc");
+      await h.check();
+    });
+
+    it("keeps the source of pasted text copied in an earlier session", async () => {
+      const clips = new MemoryClips();
+      const h = new Harness();
+      h.rec.clips = clips;
+      h.type("ab ");
+      h.paste("PQ", null);
+      h.select(0, 5);
+      const nonce = h.copy();
+      const { doc } = await h.check();
+      const key = h.rec.docKey;
+      h.rec = Recorder.resume(doc, doc.t0 + 1e6);
+      h.rec.clips = clips;
+      h.rec.docKey = key;
+      h.select(5, 5);
+      h.paste("ab PQ", nonce);
+      expect(h.srcString()).toBe("tttpp" + "cccpp");
+      // not lining up: the copy as a whole includes pasted text
+      h.paste("ab PQ\n", nonce);
+      expect(h.srcString()).toBe("tttppcccpp" + "pppppp");
       await h.check();
     });
 
