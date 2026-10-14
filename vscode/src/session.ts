@@ -240,9 +240,10 @@ export class Session {
     return out;
   }
 
-  counts(): Record<Src, number> {
+  // How many characters there are of each source (as given by `srcOf`).
+  counts(srcOf = (id: number) => this.rec.src[id]): Record<Src, number> {
     const c: Record<Src, number> = { t: 0, p: 0, c: 0, x: 0, o: 0, k: 0 };
-    for (const id of this.rec.live) c[this.rec.src[id]]++;
+    for (const id of this.rec.live) c[srcOf(id)]++;
     return c;
   }
 }

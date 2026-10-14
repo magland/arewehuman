@@ -22,13 +22,16 @@ Each character gets an implicit id, the time it was inserted (in milliseconds), 
 |---|---|
 | typed | inserted by an edit that immediately followed a keydown or IME composition step |
 | pasted | pasted or dropped from outside the document |
-| copied | pasted from a copy of typed text made within the same document (a copy of pasted, imported or other text keeps that source) |
+| copied | pasted from a copy of typed text made within the same document, or a duplicated line of typed text |
 | imported | present in a `.md` file that was opened without a recording |
 | other | anything else, such as dictation, autocorrect, or text inserted without a key event |
+| from another file | moved or copied from another file of the same project (VS Code extension only), with a reference to the characters it came from |
 
-Deletions, undo/redo, and moves (cut and paste within the document, drag and drop, moving a line) are recorded with their times and positions. Undo and moves restore the original character ids, so moving your own paragraph does not make it look pasted. The log is described precisely in [SPEC.md](SPEC.md).
+A copy of pasted, imported or other text keeps the source of what it copies, so that copying pasted text and deleting the original does not make it look typed. Deletions, undo/redo, and moves (cut and paste within the document, drag and drop, moving a line) are recorded with their times and positions. Undo and moves restore the original character ids, so moving your own paragraph does not make it look pasted. The log is described precisely in [SPEC.md](SPEC.md).
 
-To recognize its own cuts, the editor puts a random nonce on the clipboard next to the plain text, under a type that other applications ignore, so copied text pastes normally anywhere else. A cut pasted back into the same document is then a move even after a reload. Text pasted from another document, including another recorded one, counts as pasted, since its history is not part of this document's. See "Copy and paste" in [SPEC.md](SPEC.md).
+To recognize its own copies and cuts, the editor puts a random nonce on the clipboard next to the plain text, under a type that other applications ignore, so copied text pastes normally anywhere else. A cut pasted back into the same document is then a move even after a reload, and a copy is recognized as a copy. Text pasted from another document, including another recorded one, counts as pasted, since its history is not part of this document's. The exception is a project in the VS Code extension that keeps its recordings together in a `.arewehuman` directory: there, text moved or copied between its files refers to the recording it came from. See "Copy and paste" and "Text from another file" in [SPEC.md](SPEC.md).
+
+The editor highlights text that was not typed, by source. Copies of typed text are not highlighted. In the VS Code extension, text from another file of the project is highlighted by its source in that file, so a paragraph moved between chapters is not highlighted if it was typed. Detailed lists of the cases each editor handles are in [CASES-WEB.md](CASES-WEB.md) and [CASES-VSCODE.md](CASES-VSCODE.md).
 
 If all of the text is deleted, for example to write a different document in its place, the editor offers to start the document over from that point, so that its recording does not open with a document that no longer exists. See "Starting over" in [SPEC.md](SPEC.md).
 
@@ -36,7 +39,7 @@ The values of deleted characters are held in memory only for the current session
 
 ## Replaying
 
-The Replay page accepts a `.md.awh.jsonl` recording (optionally with its `.md` file, and also the older `.prov.json` format), checks that the event log reproduces the text exactly and that the SHA-256 hash chain and seal are intact, and then plays back the writing of the document. Speeds are Fast, Normal, and Slow (typing compressed into about 30 s, 60 s, or 150 s, with long pauses shown as short beats) or the recorded typing pace at ×1, ×2, ×5, or ×10. Pasted, imported, or otherwise non-typed text is highlighted, and later-deleted text appears as placeholder blocks.
+The Replay page accepts a `.md.awh.jsonl` recording (optionally with its `.md` file, and also the older `.prov.json` format), checks that the event log reproduces the text exactly and that the SHA-256 hash chain and seal are intact, and then plays back the writing of the document. Speeds are Fast, Normal, and Slow (typing compressed into about 30 s, 60 s, or 150 s, with long pauses shown as short beats) or the recorded typing pace at ×1, ×2, ×5, or ×10. Pasted, imported, or otherwise non-typed text is highlighted (copies of typed text and text from another file are not), and later-deleted text appears as placeholder blocks.
 
 To see who wrote what in a document edited in several workspaces (see below), drop all of its recordings on the Replay page together, with or without the `.md` file.
 

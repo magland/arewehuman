@@ -426,7 +426,8 @@ function update() {
   const s = vscode.window.activeTextEditor && sessions.get(vscode.window.activeTextEditor.document.uri.toString());
   void vscode.commands.executeCommand("setContext", "arewehuman.recording", !!s);
   if (!s) return void status.hide();
-  const counts = s.counts();
+  // Text from another file counts by its source there, as it is highlighted.
+  const counts = s.counts(origins.shown(s.rec, s.log));
   const total = s.rec.live.length;
   const pct = (n: number) => (total ? Math.round((100 * n) / total) : 0);
   status.text = `$(record) Recording · typed ${pct(counts.t)}%`;

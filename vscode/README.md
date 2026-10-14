@@ -9,10 +9,13 @@ Recording happens in VS Code's own text editor, so keybindings, themes and most 
 The extension API does not say whether a change came from a keystroke, a paste, an autocompletion or another extension, so the extension infers it as follows.
 
 - *Typed.* VS Code sends every character typed into a text editor through its `type` command (and IME input through `compositionType` and `replacePreviousChar`). While a recorded file is open, the extension takes over these commands and passes each call on to VS Code's built-in version, as Vim emulators do. A change made during one of these calls is typed. This includes brackets closed automatically and indentation added after Enter, but not accepted completions or inline suggestions, which are "other".
-- *Pasted.* A paste provider sees each paste before it happens, together with the clipboard's contents. On copy, it attaches a nonce next to the text, as the web app does (see "Copy and paste" in `../SPEC.md`), so a cut pasted back into the same file is a move.
+- *Pasted.* A paste provider sees each paste before it happens, together with the clipboard's contents. On copy, it attaches a nonce next to the text, as the web app does (see "Copy and paste" in `../SPEC.md`), so a cut pasted back into the same file is a move and a copy is recognized as a copy.
+- *Copied lines.* VS Code does not say which command made an edit, so an edit that only inserts whole lines next to the same lines is taken to be Copy Line Up or Down, and recorded as a copy.
 - *Undo and redo* are reported by VS Code and restore the original character ids.
 - *Moves.* An edit that removes exactly the characters it inserts, such as moving a line or dragging a selection, is a move.
 - Anything else, including edits by other extensions, AI agents, formatters, and changes to the file on disk, is "other".
+
+Every case, including edge cases, is listed in [`../CASES-VSCODE.md`](../CASES-VSCODE.md).
 
 Only one extension can take over the `type` command. If another one has it (for example a Vim emulator), the extension instead counts any single character (or a line break) inserted in the focused editor as typed. This is weaker, since a single character inserted by another extension is then also counted as typed, and the status bar tooltip says when it is in effect.
 
@@ -71,7 +74,7 @@ Then open this folder in VS Code and press F5, or run `code --extensionDevelopme
 ## Known limitations
 
 - While a file is being recorded, every character typed in any VS Code editor passes through the extension, which adds a small delay when the extension host is busy. Vim emulators and other extensions that take over `type` cannot be used at the same time, except in the weaker mode described above.
-- Tab (indentation) and edits made by other commands, such as "Copy Line Down", are recorded as "other".
+- Tab (indentation) and edits made by most other commands are recorded as "other". Copy Line Up and Down are recognized by the shape of the edit (see above).
 - A cut is recognized as a move when pasted back into the same file within the same VS Code window. After a restart, or from another window, it is recorded as pasted.
 - A file renamed outside VS Code is reconnected with its recording only when its text still matches (see above). Older `.prov.json` recordings are not picked up; convert one by importing it into the web app and exporting it again.
 - Who wrote what covers the text as it stands. A single replay of everyone's writing in time order is not available yet; each workspace's replay is shown separately.
