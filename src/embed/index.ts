@@ -1,7 +1,6 @@
 // A recording editor for other web pages to embed, without the web app's UI
-// or React. The host supplies the text of a file (after its frontmatter) and
-// its recording file, and gets back the updated text and recording file to
-// store. The recording is extended, never rewritten: the updated file is the
+// or React. The host supplies the text of a file and its recording file, and
+// gets back the updated text and recording file to store. The recording is extended, never rewritten: the updated file is the
 // given one up to its final line, then the new events and checkpoints, then a
 // new final line, as when the VS Code extension saves.
 //
@@ -20,7 +19,8 @@ export { parseLog } from "../prov/log";
 
 export interface EmbedOptions {
   parent: HTMLElement;
-  // The recorded text: for Markdown, the file's text after its frontmatter.
+  // The recorded text: the file's text (frontmatter included, unless the
+  // host keeps it out, as recordings made before 2026-10-14 did).
   body: string;
   // The recording file (name.md.awh.jsonl) as stored, or null to edit without
   // recording.

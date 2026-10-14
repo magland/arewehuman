@@ -4,15 +4,10 @@ import type { ProvDoc, Src } from "../../src/prov/format";
 import { diffText } from "../../src/prov/diff";
 import { splitFrontmatter } from "../../src/prov/frontmatter";
 
-// A Markdown file's frontmatter is left out of its recording (see
-// src/prov/frontmatter.ts); other files are recorded whole.
-export const isMarkdown = (path: string) => /\.(md|markdown|mdx)$/i.test(path);
-const noFront = (text: string) => ({ front: "", body: text });
-const splitterFor = (path: string) => (isMarkdown(path) ? splitFrontmatter : noFront);
-
-// The recorded text of a file: for Markdown, everything after its frontmatter;
-// with \n line breaks.
-export const bodyOf = (text: string, path: string) => splitterFor(path)(text).body.replace(/\r\n/g, "\n");
+// The recorded text of a file: all of it (Markdown frontmatter included), with
+// \n line breaks. (Recordings made before 2026-10-14 left a Markdown file's
+// frontmatter out; it is recorded as "other" when such a file is next opened.)
+export const bodyOf = (text: string) => text.replace(/\r\n/g, "\n");
 
 // The offset of a position in `text`, which need not be the document's current text.
 function offsetIn(text: string, p: vscode.Position) {
@@ -53,9 +48,11 @@ export interface OnDisk {
 // Code's own editor; every change event is passed to the recorder.
 export class Session {
   private text: string; // the document text as of the last change event
-  private split: (text: string) => { front: string; body: string };
   // What changed outside the recorder before this session started, if anything.
   readonly outsideChange: { del: number; ins: number } | null;
+  // Whether that difference is only a Markdown frontmatter block that an older
+  // recording left out.
+  readonly frontmatterAdded: boolean;
   // The state before the last edit, if that edit only deleted text (see captureCopy).
   private lastDeletion: { text: string; live: number[]; spans: string } | null = null;
   // The non-empty selections, as spans of the recorded text, if they were
@@ -75,9 +72,10 @@ export class Session {
     recorded: string,
     private head: () => string | null = () => null,
   ) {
-    this.split = splitterFor(document.uri.path);
     this.text = document.getText();
-    const cs = diffText(recorded, this.bodyOf(this.text));
+    const { front, body } = splitFrontmatter(bodyOf(this.text));
+    this.frontmatterAdded = !!front && body === recorded;
+    const cs = diffText(recorded, bodyOf(this.text));
     this.outsideChange = cs.length
       ? { del: cs.reduce((n, c) => n + c.removed.length, 0), ins: cs.reduce((n, c) => n + c.text.length, 0) }
       : null;
@@ -88,27 +86,15 @@ export class Session {
     }
   }
 
-  private bodyOf(text: string) {
-    return this.split(text).body.replace(/\r\n/g, "\n");
-  }
-
   get body() {
-    return this.bodyOf(this.text);
-  }
-
-  get frontLength() {
-    return this.split(this.text).front.length;
+    return bodyOf(this.text);
   }
 
   // Notes the selections of an editor of the document, so that an edit that
   // inserts copies of the selected text can be recognized (see onChange).
   noteSelection(selections: readonly vscode.Selection[]) {
     const text = this.document.getText();
-    const front = this.split(text).front.length;
-    const toBody = (p: vscode.Position) => {
-      const o = this.document.offsetAt(p);
-      return text.slice(front, Math.max(front, o)).replace(/\r\n/g, "\n").length;
-    };
+    const toBody = (p: vscode.Position) => bodyOf(text.slice(0, this.document.offsetAt(p))).length;
     const spans = selections
       .filter((s) => !s.isEmpty)
       .map((s): [number, number] => [toBody(s.start), toBody(s.end)])
@@ -127,15 +113,13 @@ export class Session {
       : null;
     let changes = this.bodyChanges(old, e.contentChanges);
     if (!changes) {
-      // The frontmatter changed, or the file has \r\n line breaks: compare the
-      // recorded text as a whole.
-      changes = diffText(this.bodyOf(old), this.body);
+      // The file has \r\n line breaks: compare the recorded text as a whole.
+      changes = diffText(bodyOf(old), this.body);
       if (!changes.length) return;
-      if (this.split(old).front !== this.split(this.text).front) cause = "other";
     } else if (cause === "other") {
       // An edit from elsewhere, such as the file being reloaded after it changed
       // on disk, may replace far more than it changes. Record only what changed.
-      const cs = diffText(this.bodyOf(old), this.body);
+      const cs = diffText(bodyOf(old), this.body);
       if (size(cs) < size(changes)) changes = cs;
       if (!changes.length) return;
     }
@@ -153,7 +137,7 @@ export class Session {
       // Inserting exactly the text that was selected just before, as dragging
       // a selection with the copy modifier or Duplicate Selection does, is a
       // copy of it.
-      const before = this.bodyOf(old);
+      const before = bodyOf(old);
       if (changes.every((c, k) => !c.removed && c.text === before.slice(...selected[k]))) {
         changes.forEach((c, k) => (c.copyOf = this.rec.live.slice(...selected[k])));
         cause = "duplicate";
@@ -165,37 +149,33 @@ export class Session {
     this.rec.applyChanges(changes, t, cause, pasteNonce);
   }
 
-  // The change event in terms of the recorded text, or null if it touches the
-  // frontmatter or cannot be mapped exactly.
+  // The change event in terms of the recorded text, or null if it cannot be
+  // mapped exactly (as with \r\n line breaks).
   private bodyChanges(old: string, events: readonly vscode.TextDocumentContentChangeEvent[]): Change[] | null {
     if (this.document.eol === vscode.EndOfLine.CRLF) return null;
-    const front = this.split(old).front;
-    if (this.split(this.text).front !== front) return null;
-    const n = front.length;
     const out: Change[] = [];
     let delta = 0;
-    let end = n;
+    let end = 0;
     for (const c of [...events].sort((a, b) => a.rangeOffset - b.rangeOffset)) {
       if (c.rangeOffset < end) return null;
       end = c.rangeOffset + c.rangeLength;
-      const fromA = c.rangeOffset - n;
+      const fromA = c.rangeOffset;
       out.push({ fromA, toA: fromA + c.rangeLength, fromB: fromA + delta, text: c.text, removed: old.slice(c.rangeOffset, end) });
       delta += c.text.length - c.rangeLength;
     }
     // Check the mapping against the new text.
-    const a = old.slice(n);
     let b = "";
     let pos = 0;
     for (const c of out) {
-      b += a.slice(pos, c.fromA) + c.text;
+      b += old.slice(pos, c.fromA) + c.text;
       pos = c.toA;
     }
-    b += a.slice(pos);
-    return b === this.text.slice(n) ? out : null;
+    b += old.slice(pos);
+    return b === this.text ? out : null;
   }
 
   // Registers a copy or cut of `ranges` with the recorder and returns its nonce,
-  // or null if nothing outside the frontmatter was copied. VS Code may apply a
+  // or null if nothing was copied. VS Code may apply a
   // cut before it asks for the clipboard data, so if the last edit deleted
   // exactly these ranges, they refer to the text before it.
   captureCopy(ranges: readonly vscode.Range[]): string | null {
@@ -220,10 +200,9 @@ export class Session {
         break;
       }
     }
-    // Offsets in terms of the recorded text, which has no frontmatter and no \r.
-    const front = this.split(text).front.length;
-    const toBody = (o: number) => text.slice(front, Math.max(front, o)).replace(/\r\n/g, "\n").length;
-    const body = this.bodyOf(text);
+    // Offsets in terms of the recorded text, which has no \r.
+    const toBody = (o: number) => bodyOf(text.slice(0, o)).length;
+    const body = bodyOf(text);
     const inBody = spans
       .map(([a, b]) => ({ from: toBody(a), to: toBody(b) }))
       .filter((r) => r.to > r.from);
@@ -241,7 +220,6 @@ export class Session {
   // ranges of the document.
   sourceRuns(srcOf = (id: number) => this.rec.src[id]): { src: Src; range: vscode.Range }[] {
     const { rec } = this;
-    const off = this.frontLength;
     const crlf = this.document.eol === vscode.EndOfLine.CRLF;
     // With \r\n line breaks, recorded offsets skip the \r characters.
     const lineStarts = [0];
@@ -250,7 +228,7 @@ export class Session {
       for (let i = body.indexOf("\n"); i >= 0; i = body.indexOf("\n", i + 1)) lineStarts.push(i + 1);
     }
     const toDoc = (i: number) => {
-      if (!crlf) return this.document.positionAt(off + i);
+      if (!crlf) return this.document.positionAt(i);
       let lo = 0;
       let hi = lineStarts.length - 1;
       while (lo < hi) {
@@ -258,7 +236,7 @@ export class Session {
         if (lineStarts[mid] <= i) lo = mid;
         else hi = mid - 1;
       }
-      return this.document.positionAt(off + i + lo);
+      return this.document.positionAt(i + lo);
     };
     const out: { src: Src; range: vscode.Range }[] = [];
     const n = rec.live.length;

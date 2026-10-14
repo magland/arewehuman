@@ -144,7 +144,7 @@ function writeLog(s: Session): Promise<void> {
 
 async function writeLogNow(s: Session) {
   const doc = await s.toDoc();
-  if (doc.text !== bodyOf(s.document.getText(), s.document.uri.path))
+  if (doc.text !== bodyOf(s.document.getText()))
     vscode.window.showWarningMessage("arewehuman: the recorded text differs from the document being saved; the recording may not match.");
   const uri = s.log!;
   const mark = { events: doc.events.length, checkpoints: doc.chain.checkpoints.length };
@@ -223,7 +223,7 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   if (logText === null && !others.length) {
     // The file may have been renamed or moved outside VS Code, leaving its
     // recording behind under the old name.
-    const orphan = await findOrphan(doc.uri, place, bodyOf(doc.getText(), doc.uri.path), finalText).catch(() => null);
+    const orphan = await findOrphan(doc.uri, place, bodyOf(doc.getText()), finalText).catch(() => null);
     const near = orphan && orphan.similarity < 1 && `${orphan.oldFile} (${Math.round(100 * orphan.similarity)}% the same)`;
     const take =
       orphan &&
@@ -259,7 +259,7 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   // Prefer the stored unsaved edits when they extend the recording file, and
   // whichever recording matches the document as it is now.
   const saved = side && (await loadUnsaved(doc));
-  const body = bodyOf(doc.getText(), doc.uri.path);
+  const body = bodyOf(doc.getText());
   const candidates = [saved && side && saved.t0 === side.t0 && saved.events.length >= side.events.length ? saved : null, side]
     .filter((d): d is ProvDoc => !!d)
     .sort((a, b) => Number(b.text === body) - Number(a.text === body));
@@ -283,7 +283,7 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
     if (choice !== "Start a New Recording" || doc.isClosed) return null;
   }
   if (!session) {
-    const now = bodyOf(doc.getText(), doc.uri.path);
+    const now = bodyOf(doc.getText());
     session = new Session(doc, Recorder.fresh(Date.now(), now, gitHead(doc.uri)), now, () => gitHead(doc.uri));
     create = !auto;
   }
@@ -304,7 +304,9 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   } else if (session.outsideChange) {
     const { del, ins } = session.outsideChange;
     vscode.window.showInformationMessage(
-      `arewehuman: ${baseName(doc.uri)} was changed outside the recorder since its recording was last saved (${del} characters removed, ${ins} added). These changes are recorded as "other".`,
+      session.frontmatterAdded
+        ? `arewehuman: the frontmatter of ${baseName(doc.uri)} is now recorded too (as "other" from here on; earlier versions of the extension left it out).`
+        : `arewehuman: ${baseName(doc.uri)} was changed outside the recorder since its recording was last saved (${del} characters removed, ${ins} added). These changes are recorded as "other".`,
     );
     // The file on disk already has these changes, so the recording should too.
     if (!doc.isDirty) await writeLog(session);
@@ -480,7 +482,7 @@ async function projectMessage(log: vscode.Uri, current: string, initial?: string
   const others = await Promise.all(otherFiles.map(async (r) => ({ name: `${r.file} · ${r.workspace}`, log: await read(r) })));
   const file = mdOf(log);
   const md = await readText(file);
-  return { type: "project", title: baseName(file), md: md === null ? null : bodyOf(md, file.path), recs, others, initial };
+  return { type: "project", title: baseName(file), md: md === null ? null : bodyOf(md), recs, others, initial };
 }
 
 class ViewerProvider implements vscode.CustomTextEditorProvider {
@@ -492,7 +494,7 @@ class ViewerProvider implements vscode.CustomTextEditorProvider {
       const project = await projectMessage(document.uri, document.getText(), name);
       if (project) return void panel.webview.postMessage(project);
       const md = await readText(mdOf(document.uri));
-      panel.webview.postMessage({ type: "show", log: document.getText(), md: md === null ? null : bodyOf(md, mdOf(document.uri).path) });
+      panel.webview.postMessage({ type: "show", log: document.getText(), md: md === null ? null : bodyOf(md) });
     };
     setupViewer(this.ctx, panel, send);
     const sub = vscode.workspace.onDidChangeTextDocument((e) => {

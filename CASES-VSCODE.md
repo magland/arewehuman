@@ -99,14 +99,13 @@ On copy or cut, the paste provider puts a random nonce on VS Code's clipboard da
 | An edit that replaces far more than it changes (a reload) | Only what changed is recorded. |
 | An undo back to the saved text | Written to the recording at once. |
 
-## Markdown frontmatter and line breaks
+## Frontmatter and line breaks
 
 | Case | Handling |
 |---|---|
-| Markdown file with YAML frontmatter | The frontmatter is not recorded; the recorded text is the rest of the file. |
-| Edit that touches the frontmatter | The recorded text is compared as a whole and the difference recorded; a change to the frontmatter itself makes the edit `o`. |
+| Markdown file with YAML frontmatter | Recorded like any other text; the recorded text is the whole file. |
+| Recording made before 2026-10-14, which left the frontmatter out | When the file is next opened, the frontmatter is recorded as `o`, with a notification saying so. |
 | File with `\r\n` line breaks | Recorded with `\n`; each edit is recorded as the difference of the recorded text. |
-| Other file types | Recorded whole. |
 
 ## Saving and storage
 
