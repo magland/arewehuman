@@ -205,8 +205,9 @@ export class Session {
     return this.rec.toDoc(this.body, title);
   }
 
-  // Runs of characters by source, as ranges of the document.
-  sourceRuns(): { src: Src; range: vscode.Range }[] {
+  // Runs of characters by source (as given by `srcOf`, for a character id), as
+  // ranges of the document.
+  sourceRuns(srcOf = (id: number) => this.rec.src[id]): { src: Src; range: vscode.Range }[] {
     const { rec } = this;
     const off = this.frontLength;
     const crlf = this.document.eol === vscode.EndOfLine.CRLF;
@@ -230,9 +231,9 @@ export class Session {
     const out: { src: Src; range: vscode.Range }[] = [];
     const n = rec.live.length;
     for (let i = 0; i < n; ) {
-      const s = rec.src[rec.live[i]];
+      const s = srcOf(rec.live[i]);
       let j = i + 1;
-      while (j < n && rec.src[rec.live[j]] === s) j++;
+      while (j < n && srcOf(rec.live[j]) === s) j++;
       out.push({ src: s, range: new vscode.Range(toDoc(i), toDoc(j)) });
       i = j;
     }

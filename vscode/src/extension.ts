@@ -8,6 +8,7 @@ import { sha256 } from "../../src/prov/chain";
 import { lastRestartPoint, restartAt } from "../../src/prov/restart";
 import { bodyOf, Session, type OnDisk } from "./session";
 import { Typing } from "./typing";
+import { Origins } from "./origins";
 import { adoptOrphan, autoPatterns, autoRecorded, configUri, findOrphan, findRoot, readConfig, writeConfig, gitHead, initPlaces, mdOf, moveRecordings, othersOf, placeOf, projectRecordings, STORE } from "./places";
 
 const VIEWER = "arewehuman.viewer";
@@ -52,6 +53,12 @@ async function readText(u: vscode.Uri): Promise<string | null> {
 // edited.
 const sessions = new Map<string, Session>();
 const loading = new Map<string, Promise<Session | null>>();
+
+// For highlighting text from other files of a project by where it came from.
+const origins = new Origins(
+  () => [...sessions.values()].map((s) => s.rec),
+  () => refresh(),
+);
 
 // Recent copies made in recorded documents in this window (see
 // src/editor/clips.ts): nonces and character ids, never text.
@@ -286,6 +293,7 @@ async function load(doc: vscode.TextDocument, create: boolean): Promise<Session 
   session.rec.docKey = key;
   offered.set(session, session.rec.emptiedAt);
   sessions.set(key, session);
+  origins.forget(session.rec.ref);
   typing.enable();
   if (create) {
     await writeLog(session);
@@ -371,6 +379,7 @@ function stop(doc: vscode.TextDocument) {
   if (!s) return;
   if (persistTimers.has(s)) void persist(s);
   sessions.delete(key);
+  origins.forget(s.rec.ref);
   pending.delete(key);
   if (!sessions.size) typing.disable();
   refresh();
@@ -379,7 +388,8 @@ function stop(doc: vscode.TextDocument) {
 // Highlighting of non-typed text, and the status bar item.
 const alpha = { light: "42", dark: "61" }; // 26% and 38%, as in the web app
 // Copies of typed text ("c") are not highlighted; the recorder gives copies of
-// anything else the source of what they copied.
+// anything else the source of what they copied. Text from another file ("k")
+// is shown by its source there (see origins.ts), or as "k" if that is unknown.
 const colors: Record<Exclude<Src, "t" | "c">, { light: string; dark: string }> = {
   p: { light: "#eb6834", dark: "#d95926" },
   x: { light: "#eda100", dark: "#c98500" },
@@ -409,7 +419,7 @@ function update() {
   for (const ed of vscode.window.visibleTextEditors) {
     const s = sessions.get(ed.document.uri.toString());
     const ranges: Record<string, vscode.Range[]> = { p: [], x: [], o: [], k: [] };
-    if (s && highlight) for (const r of s.sourceRuns()) ranges[r.src]?.push(r.range);
+    if (s && highlight) for (const r of s.sourceRuns(origins.shown(s.rec, s.log))) ranges[r.src]?.push(r.range);
     for (const [src, deco] of Object.entries(decorations)) ed.setDecorations(deco, ranges[src]);
   }
 
