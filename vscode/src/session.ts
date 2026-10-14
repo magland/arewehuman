@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { Recorder, type Cause, type Change } from "../../src/editor/recorder";
+import { copiedLines, Recorder, type Cause, type Change } from "../../src/editor/recorder";
 import type { ProvDoc, Src } from "../../src/prov/format";
 import { diffText } from "../../src/prov/diff";
 import { splitFrontmatter } from "../../src/prov/frontmatter";
@@ -117,6 +117,16 @@ export class Session {
       if (size(cs) < size(changes)) changes = cs;
       if (!changes.length) return;
     }
+    if (cause === "other") {
+      // VS Code does not say which command made an edit. Inserting whole lines
+      // next to the same lines is taken to be Copy Line Up or Down.
+      const body = this.body;
+      const sides = changes.map((c) => copiedLines(body, c));
+      if (sides.every((s) => s)) {
+        changes.forEach((c, k) => (c.copied = sides[k]!));
+        cause = "copyline";
+      }
+    }
     if ((cause === "other" || cause === "drop") && isMove(changes)) cause = "move";
     const t = Date.now() - this.rec.t0;
     if (cause === "other") this.rec.noteCommit(t, this.head());
@@ -162,10 +172,11 @@ export class Session {
     let kind: "cut" | "copy" = "copy";
     const lines = (t: string, a: number, b: number): [number, number] => [offsetIn(t, new vscode.Position(a, 0)), offsetIn(t, new vscode.Position(b + 1, 0))];
     const exact = (t: string) => ranges.map((r): [number, number] => (r.isEmpty ? lines(t, r.start.line, r.start.line) : [offsetIn(t, r.start), offsetIn(t, r.end)]));
-    // Cutting with an empty selection reports each line without its line
-    // break, but removes the line break too.
+    // Copying or cutting with an empty selection reports each line without
+    // its line break, but copies (and removes) the line break too.
     const whole = (t: string) => ranges.map((r) => lines(t, r.start.line, r.end.line));
-    let spans = exact(text);
+    const ed = vscode.window.visibleTextEditors.find((e) => e.document === this.document);
+    let spans = ed && ed.selections.every((s) => s.isEmpty) ? whole(text) : exact(text);
     const d = this.lastDeletion;
     for (const f of d ? [exact, whole] : []) {
       const sp = f(d!.text);

@@ -7,6 +7,23 @@ import { MemoryClips, type ClipRegistry } from "./clips";
 // Used by recorders that are not given a registry of their own.
 const defaultClips = new MemoryClips();
 
+// A character of another recording: that recording's reference and the character's id there.
+export interface Ref {
+  rec: string;
+  id: number;
+}
+
+// How the characters of an inserted text came about (see Recorder.classify):
+// for each, the deleted id it restores, or null if it is new; the source of
+// new ones (one for all, or one per character); and for those of source "k",
+// the character they came from.
+interface Plan {
+  ids: (number | null)[];
+  src: Src | Src[];
+  kind: RestoreKind;
+  from?: (Ref | null)[];
+}
+
 // What the view layer observed around a transaction.
 export interface Hints {
   typedOk: boolean; // a keydown or IME composition happened just before
@@ -40,6 +57,26 @@ export interface Change {
   fromB: number;
   text: string;
   removed: string;
+  // For a copied line (cause "copyline"): which side of the inserted text the
+  // copied lines are on (see copiedLines).
+  copied?: "before" | "after";
+}
+
+// For an insertion that duplicates whole lines next to it, as copying a line up
+// or down does: "before" if the inserted text is a line break and the lines
+// just before it, "after" if it is the lines just after it and a line break,
+// or null if it is neither. `text` is the document after the edit.
+export function copiedLines(text: string, c: Change): "before" | "after" | null {
+  const T = c.text;
+  const n = T.length - 1;
+  if (c.removed || n < 1) return null;
+  const p = c.fromB;
+  const q = p + T.length;
+  const lineStart = (i: number) => i === 0 || text[i - 1] === "\n";
+  const lineEnd = (i: number) => i === text.length || text[i] === "\n";
+  if (T[0] === "\n" && p >= n && lineStart(p - n) && lineEnd(q) && text.slice(p - n, p) === T.slice(1)) return "before";
+  if (T[n] === "\n" && lineStart(p) && text.slice(q, q + n) === T.slice(0, n) && lineEnd(q + n)) return "after";
+  return null;
 }
 
 // The cause of a CodeMirror transaction, from its user event and the hints.
@@ -74,6 +111,7 @@ export class Recorder {
   readonly id: string | undefined;
   live: number[]; // ids aligned with the document
   src: Src[] = []; // by id
+  fromOf: (Ref | undefined)[] = []; // by id: for source "k", the character it came from
   alive: boolean[] = []; // by id
   clip: Clip | null = null;
   // When an edit last deleted all of the text: the number of ids created by
@@ -94,7 +132,10 @@ export class Recorder {
     this.events = events;
     const res = replay({ events, text: "" });
     this.live = res.live;
-    res.chars.forEach((c, id) => (this.src[id] = c.src));
+    res.chars.forEach((c, id) => {
+      this.src[id] = c.src;
+      if (c.from) this.fromOf[id] = { rec: c.from.ref, id: c.from.id };
+    });
     for (const id of res.live) this.alive[id] = true;
     for (let id = 0; id < res.chars.length; id++) this.alive[id] = !!this.alive[id];
     this.seq = this.live.slice();
@@ -146,7 +187,12 @@ export class Recorder {
     tr.changes.iterChanges((fromA, toA, fromB, _toB, ins) =>
       changes.push({ fromA, toA, fromB, text: ins.toString(), removed: oldDoc.sliceString(fromA, toA) }),
     );
-    this.applyChanges(changes, t, causeOf(tr, hints), hints.pasteNonce);
+    const cause = causeOf(tr, hints);
+    if (cause === "copyline") {
+      const text = tr.state.doc.toString();
+      for (const c of changes) c.copied = copiedLines(text, c) ?? undefined;
+    }
+    this.applyChanges(changes, t, cause, hints.pasteNonce);
   }
 
   // Records one edit, given as a list of changes (see Change). For a paste,
@@ -174,47 +220,39 @@ export class Recorder {
     if (pool.length && !this.live.length) this.emptiedAt = this.src.length;
 
     // Then insertions, first to last; fromB is the position once earlier ones are in.
-    for (const c of changes) {
-      if (!c.text.length) continue;
-      const { ids, src, kind, from } = this.classify(cause, c, pool, pasteNonce);
+    const inserts = changes.filter((c) => c.text.length);
+    inserts.forEach((c, part) => {
+      const { ids, src, kind, from } = this.classify(cause, c, pool, pasteNonce, part, inserts.length);
       const srcAt = (k: number) => (typeof src === "string" ? src : src[k]);
+      // Characters from another recording (source "k") form runs that refer to one recording.
+      const recAt = (k: number) => (srcAt(k) === "k" ? from![k]!.rec : null);
       let pos = c.fromB;
-      if (from) {
-        // Characters from another recording: new ids here, with a reference.
-        const run: number[] = [];
-        for (let k = 0; k < c.text.length; k++) {
-          run.push(this.src.length);
-          this.src.push("k");
-          this.alive.push(false);
-        }
-        this.events.push(fromEv(t, pos, c.text, from.rec, from.ids));
-        this.insertIds(pos, run);
-        continue;
-      }
       for (let i = 0; i < ids.length; ) {
         let j = i + 1;
         const restoring = ids[i] !== null;
-        while (j < ids.length && (ids[j] !== null) === restoring && (restoring || srcAt(j) === srcAt(i))) j++;
+        while (j < ids.length && (ids[j] !== null) === restoring && (restoring || (srcAt(j) === srcAt(i) && recAt(j) === recAt(i)))) j++;
         if (restoring) {
           const run = ids.slice(i, j) as number[];
           this.events.push(["r", t, pos, kind, encodeRanges(run)]);
           this.insertIds(pos, run, kind === "u");
         } else {
-          const n = j - i;
           const run: number[] = [];
-          for (let k = 0; k < n; k++) {
+          for (let k = i; k < j; k++) {
             const id = this.src.length;
-            this.src.push(srcAt(i));
+            this.src.push(srcAt(k));
+            if (srcAt(k) === "k") this.fromOf[id] = from![k]!;
             this.alive.push(false);
             run.push(id);
           }
-          this.events.push(insertEv(t, pos, c.text.slice(i, j), srcAt(i)));
+          const text = c.text.slice(i, j);
+          const rec = recAt(i);
+          this.events.push(rec === null ? insertEv(t, pos, text, srcAt(i)) : fromEv(t, pos, text, rec, from!.slice(i, j).map((f) => f!.id)));
           this.insertIds(pos, run);
         }
         pos += j - i;
         i = j;
       }
-    }
+    });
   }
 
   // In a recording shared by several people: notes who makes the edits that
@@ -233,17 +271,20 @@ export class Recorder {
   }
 
   // Decides, for each inserted character, whether it restores a deleted id or
-  // is new, and the source of new ones (one for all, or one per character).
+  // is new, and the source of new ones. `part` is the index of this change
+  // among the edit's `parts` insertions (a paste at several cursors).
   private classify(
     cause: Cause,
     c: Change,
     pool: { id: number; ch: string; used?: boolean }[],
     pasteNonce: string | null | undefined,
-  ): { ids: (number | null)[]; src: Src | Src[]; kind: RestoreKind; from?: { rec: string; ids: number[] } } {
+    part = 0,
+    parts = 1,
+  ): Plan {
     const T = c.text;
     const none = (): (number | null)[] => new Array(T.length).fill(null);
     if (cause === "undo") {
-      return { ids: this.matchGap(c.fromB, T), src: "o" as Src, kind: "u" as RestoreKind };
+      return { ids: this.matchGap(c.fromB, T), src: "o", kind: "u" };
     }
     if (cause === "move") {
       const ids = Array.from(T, (ch) => {
@@ -252,30 +293,32 @@ export class Recorder {
         p.used = true;
         return p.id;
       });
-      return { ids, src: "o" as Src, kind: "m" as RestoreKind };
+      return { ids, src: "o", kind: "m" };
     }
-    if (cause === "paste" && pasteNonce) return this.classifyPaste(T, pasteNonce);
+    if (cause === "paste" && pasteNonce) return this.classifyPaste(T, pasteNonce, part, parts);
     if (cause === "paste") {
       // No nonce on the clipboard: fall back to comparing with this session's last copy.
       const clip = this.clip;
       if (clip && clip.kind === "cut" && T === clip.raw && clip.ids.length === T.length && clip.ids.every((id) => !this.alive[id])) {
         clip.kind = "copy"; // a second paste is a copy
-        return { ids: clip.ids.slice(), src: "o" as Src, kind: "m" as RestoreKind };
+        return { ids: clip.ids.slice(), src: "o", kind: "m" };
       }
       const internal =
         clip && (T === clip.raw || T === clip.clipText || T === clip.clipText + "\n" || clip.parts.includes(T));
-      return { ids: none(), src: internal ? this.copySrcs(T.length, clip.ids) : ("p" as Src), kind: "m" as RestoreKind };
+      if (!internal) return { ids: none(), src: "p", kind: "m" };
+      return { ids: none(), ...this.copyPlan(T.length, clip.ids, lineUp(clip.ids, T)), kind: "m" };
     }
     if (cause === "copyline") {
-      // CodeMirror's copyLineDown inserts a line break and the lines just
-      // before it; copyLineUp inserts the lines just after it and a line break.
+      // A line break and the lines just before it, or the lines just after it
+      // and a line break (see copiedLines). Without `copied`, as CodeMirror's
+      // copyLineDown and copyLineUp do.
       const n = T.length - 1;
-      const down = T.startsWith("\n") && c.fromB >= n;
-      const ids = down ? this.live.slice(c.fromB - n, c.fromB) : this.live.slice(c.fromB, c.fromB + n);
-      return { ids: none(), src: this.copySrcs(T.length, ids, down ? [-1, ...ids] : [...ids, -1]), kind: "m" as RestoreKind };
+      const before = (c.copied ?? (T.startsWith("\n") ? "before" : "after")) === "before" && c.fromB >= n;
+      const ids = before ? this.live.slice(c.fromB - n, c.fromB) : this.live.slice(c.fromB, c.fromB + n);
+      return { ids: none(), ...this.copyPlan(T.length, ids, before ? [-1, ...ids] : [...ids, -1]), kind: "m" };
     }
     const src: Src = cause === "drop" ? "p" : cause === "typed" ? "t" : "o";
-    return { ids: none(), src, kind: "m" as RestoreKind };
+    return { ids: none(), src, kind: "m" };
   }
 
   // A paste whose clipboard names a copy made in a recording editor. A cut from
@@ -285,43 +328,58 @@ export class Recorder {
   // part of this document's and a replay could not show how it was written,
   // except within a .arewehuman project, where the same workspace's recordings
   // are kept together: there it refers to the characters it came from.
-  private classifyPaste(T: string, nonce: string) {
+  private classifyPaste(T: string, nonce: string, part: number, parts: number): Plan {
     const none = (): (number | null)[] => new Array(T.length).fill(null);
+    const pasted: Plan = { ids: none(), src: "p", kind: "m" };
     const e = this.clips.get(nonce);
+    const count = (x: unknown) => Number.isInteger(x) && (x as number) > 0;
     const valid =
       e && typeof e.doc === "string" && Array.isArray(e.ranges) && e.ranges.length % 2 === 0 &&
       e.ranges.every((x, j) => Number.isInteger(x) && (j % 2 ? x > 0 : x >= 0));
-    if (e && valid && e.doc !== this.docKey && this.project && e.project === this.project && typeof e.rec === "string" && e.rec !== this.ref) {
-      const ids = decodeRanges(e.ranges);
-      if (ids.length === T.length) return { ids: none(), src: "k" as Src, kind: "m" as RestoreKind, from: { rec: e.rec, ids } };
+    if (!e || !valid) return pasted;
+    let ids = decodeRanges(e.ranges);
+    // A copy of several ranges pasted at as many cursors: each gets one range.
+    if (parts > 1 && Array.isArray(e.parts) && e.parts.length === parts && e.parts.every(count) && e.parts.reduce((a, b) => a + b, 0) === ids.length) {
+      const start = e.parts.slice(0, part).reduce((a, b) => a + b, 0);
+      ids = ids.slice(start, start + e.parts[part]);
     }
-    if (!e || !valid || e.doc !== this.docKey) return { ids: none(), src: "p" as Src, kind: "m" as RestoreKind };
-    const ids = decodeRanges(e.ranges);
+    const at = lineUp(ids, T);
+    if (e.doc !== this.docKey) {
+      if (!at || !this.project || e.project !== this.project || typeof e.rec !== "string" || e.rec === this.ref) return pasted;
+      // A line break added by the editor is "other".
+      const rec = e.rec;
+      return { ids: none(), src: at.map((id) => (id >= 0 ? "k" : "o")), kind: "m", from: at.map((id) => (id >= 0 ? { rec, id } : null)) };
+    }
     if (ids.length === T.length && new Set(ids).size === ids.length && ids.every((id) => id < this.nextId && !this.alive[id])) {
       if (this.clip?.nonce === nonce) this.clip.kind = "copy";
-      return { ids, src: "o" as Src, kind: "m" as RestoreKind };
+      return { ids, src: "o", kind: "m" };
     }
-    return { ids: none(), src: this.copySrcs(T.length, ids), kind: "m" as RestoreKind };
+    return { ids: none(), ...this.copyPlan(T.length, ids, at), kind: "m" };
   }
 
-  // The source of a copy, made within this document, of the character `id`. A
-  // copy of typed text is "c"; anything else keeps its source, so that copying
-  // pasted text does not make it look typed. A character from another file
-  // ("k") becomes pasted, since the copy does not refer to that file.
-  private copiedSrc(id: number): Src {
-    const s = this.src[id] ?? "p";
-    return s === "t" || s === "c" ? "c" : s === "k" ? "p" : s;
-  }
-
-  // Sources for `n` pasted characters that copy the characters `ids`. `at`
-  // gives the copied id of each pasted character, or -1 for one the editor
-  // added (such as a line break); by default the paste lines up one to one with
-  // `ids` if it has the same length. Characters that do not line up get the
-  // source of the copy as a whole: "c" if all of it was typed, else the first
-  // other source in it.
-  private copySrcs(n: number, ids: number[], at: number[] = ids.length === n ? ids : []): Src[] {
-    const all = ids.map((id) => this.copiedSrc(id)).find((s) => s !== "c") ?? "c";
-    return Array.from({ length: n }, (_, k) => (at[k] >= 0 ? this.copiedSrc(at[k]) : all));
+  // A copy, made within this document, of the characters `ids`, pasted as `n`
+  // characters. `at` gives the copied id of each pasted character, or -1 for
+  // one the editor added (such as a line break), or is null if the paste does
+  // not line up with the copy. A copy of typed text is "c"; a copy of text from
+  // another file ("k") refers to the same characters there; anything else
+  // keeps its source, so that copying pasted text does not make it look typed.
+  // Added characters, and all of them if the paste does not line up, get the
+  // source of the copy as a whole: "c" if all of it was typed (or, for added
+  // characters, came from another file), else the first other source in it.
+  private copyPlan(n: number, ids: number[], at: number[] | null): { src: Src[]; from: (Ref | null)[] } {
+    const srcOf = (id: number): Src => this.src[id] ?? "p";
+    const other = ids.map(srcOf).find((s) => s !== "t" && s !== "c" && s !== "k");
+    const fill: Src = other ?? (!at && ids.some((id) => srcOf(id) === "k") ? "p" : "c");
+    const src: Src[] = [];
+    const from: (Ref | null)[] = [];
+    for (let k = 0; k < n; k++) {
+      const id = at ? at[k] : -1;
+      const s = id >= 0 ? srcOf(id) : fill;
+      const f = s === "k" ? this.fromOf[id] : undefined;
+      src.push(f ? "k" : s === "t" || s === "c" ? "c" : s === "k" ? "p" : s);
+      from.push(f ?? null);
+    }
+    return { src, from };
   }
 
   // Undo/redo re-inserts text where it was deleted. Match it against this
@@ -416,13 +474,23 @@ export class Recorder {
   ) {
     ranges = ranges.slice().sort((x, y) => x.from - y.from);
     const ids: number[] = [];
+    const counts: number[] = [];
     let raw = "";
     for (const r of ranges) {
-      ids.push(...live.slice(r.from, r.to));
+      const run = live.slice(r.from, r.to);
+      ids.push(...run);
+      counts.push(run.length);
       raw += slice(r.from, r.to);
     }
     this.clip = { kind, raw, ids, parts, clipText, nonce };
-    this.clips.put({ nonce, doc: this.docKey, ranges: encodeRanges(ids), t: Date.now(), ...(this.project ? { project: this.project, rec: this.ref } : {}) });
+    this.clips.put({
+      nonce,
+      doc: this.docKey,
+      ranges: encodeRanges(ids),
+      ...(counts.length > 1 ? { parts: counts } : {}),
+      t: Date.now(),
+      ...(this.project ? { project: this.project, rec: this.ref } : {}),
+    });
     return nonce;
   }
 
@@ -458,6 +526,16 @@ export class Recorder {
       chain: { algorithm: "sha256", checkpoints: this.checkpoints.filter((c) => c[0] <= end), seal: await sealHash(last, textSha256) },
     };
   }
+}
+
+// How pasted text `T` lines up with the copied characters `ids`: their ids, in
+// order, if it has as many characters; with -1 for a final line break if it
+// has one more (a line copied with nothing selected is pasted with a line
+// break, which the last line of a document lacks); else null.
+function lineUp(ids: number[], T: string): number[] | null {
+  if (ids.length === T.length) return ids;
+  if (ids.length + 1 === T.length && T.endsWith("\n")) return [...ids, -1];
+  return null;
 }
 
 export function lastTime(events: Ev[]) {

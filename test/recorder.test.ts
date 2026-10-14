@@ -1,7 +1,7 @@
 import { EditorSelection, EditorState, type TransactionSpec } from "@codemirror/state";
 import { history, isolateHistory, redo, undo } from "@codemirror/commands";
 import { describe, expect, it } from "vitest";
-import { Recorder, type Hints } from "../src/editor/recorder";
+import { copiedLines, Recorder, type Hints } from "../src/editor/recorder";
 import { verifyChain } from "../src/prov/chain";
 import { replay, Timeline } from "../src/prov/replay";
 import { MemoryClips } from "../src/editor/clips";
@@ -196,6 +196,25 @@ describe("recorder", () => {
     await h.check();
   });
 
+  it("finds the lines a copied line came from", async () => {
+    const ins = (fromB: number, text: string) => ({ fromA: fromB, toA: fromB, fromB, text, removed: "" });
+    // after the edit: "ab\nab\ncd", the second "ab" inserted with a line break before or after it
+    expect(copiedLines("ab\nab\ncd", ins(2, "\nab"))).toBe("before");
+    expect(copiedLines("ab\nab\ncd", ins(0, "ab\n"))).toBe("after");
+    // the copy of an empty line and "x" (VS Code's Copy Line Up), which starts with a line break
+    expect(copiedLines("\nx\n\nx", ins(0, "\nx\n"))).toBe("after");
+    // not whole lines, or not the same text
+    expect(copiedLines("aab\ncd", ins(1, "a"))).toBe(null);
+    expect(copiedLines("xab\nab", ins(1, "ab\n"))).toBe(null);
+    expect(copiedLines("ab\ncd\ncd", ins(2, "\ncd"))).toBe(null);
+    // a duplicated line in VS Code, given as a plain change with `copied`
+    const h = new Harness();
+    h.type("\n");
+    h.paste("x", null);
+    h.rec.applyChanges([{ ...ins(0, "\nx\n"), copied: "after" }], (h.t += 100), "copyline");
+    expect(h.rec.live.map((id) => h.rec.src[id]).join("")).toBe("cpp" + "tp");
+  });
+
   it("handles moves within one transaction (drag and drop)", async () => {
     const h = new Harness();
     h.type("abc def");
@@ -321,9 +340,12 @@ describe("recorder", () => {
       h.select(5, 5);
       h.paste("ab PQ", nonce);
       expect(h.srcString()).toBe("tttpp" + "cccpp");
-      // not lining up: the copy as a whole includes pasted text
+      // with a line break added: the copy as a whole includes pasted text
       h.paste("ab PQ\n", nonce);
-      expect(h.srcString()).toBe("tttppcccpp" + "pppppp");
+      expect(h.srcString()).toBe("tttppcccpp" + "cccppp");
+      // not lining up
+      h.paste("ab PQ\n\n", nonce);
+      expect(h.srcString()).toBe("tttppcccppcccppp" + "ppppppp");
       await h.check();
     });
 

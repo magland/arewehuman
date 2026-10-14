@@ -93,6 +93,59 @@ describe("references between recordings", () => {
   });
 });
 
+describe("pastes from another file of a project", () => {
+  const P = "project|me-1234";
+  const copy = (f: File, ranges: [number, number][]) => {
+    const parts = ranges.map(([a, b]) => f.text.slice(a, b));
+    return f.rec.captureRanges("copy", ranges.map(([from, to]) => ({ from, to })), (a, b) => f.text.slice(a, b), parts, parts.join("\n"));
+  };
+  const srcs = (f: File) => f.rec.live.map((id) => f.rec.src[id]).join("");
+
+  it("keeps the reference when text from another file is copied again within a file", async () => {
+    const { one, two } = setup(P);
+    const k = two.text.indexOf("paragraph");
+    const nonce = copy(two, [[k, k + 9]]);
+    two.edit(two.text.length, two.text.length, "paragraph", "paste", nonce);
+    expect(srcs(two).slice(-9)).toBe("kkkkkkkkk");
+    const d2 = await two.doc();
+    expect(replay(d2).errors).toEqual([]);
+    const origins = attribute(two.text, [d2, await one.doc()]);
+    expect(origins.slice(-9).every((o) => o?.rec === 1 && o.src === "t")).toBe(true);
+  });
+
+  it("refers to a last line pasted with a line break added", async () => {
+    const clips = new MemoryClips();
+    const one = new File(1000, clips, P, "one");
+    const two = new File(2000, clips, P, "two");
+    one.type("first\nlast");
+    const nonce = copy(one, [[6, 10]]);
+    two.edit(0, 0, "last\n", "paste", nonce);
+    expect(srcs(two)).toBe("kkkko");
+    expect(replay(await two.doc()).errors).toEqual([]);
+  });
+
+  it("refers to each range of a copy pasted at as many cursors", async () => {
+    const clips = new MemoryClips();
+    const one = new File(1000, clips, P, "one");
+    const two = new File(2000, clips, P, "two");
+    one.type("alpha beta gamma");
+    two.type("x\ny");
+    const nonce = copy(one, [[0, 5], [11, 16]]);
+    const cs: Change[] = [
+      { fromA: 0, toA: 0, fromB: 0, text: "alpha", removed: "" },
+      { fromA: 2, toA: 2, fromB: 7, text: "gamma", removed: "" },
+    ];
+    two.rec.applyChanges(cs, (two.t += 100), "paste", nonce);
+    two.text = "alphax\ngammay";
+    expect(srcs(two)).toBe("kkkkkt" + "tkkkkkt");
+    const ks = two.rec.events.filter((e) => e[0] === "k");
+    expect(ks.map((e) => e[4])).toEqual([[0, 5], [11, 5]]);
+    const d2 = await two.doc();
+    expect(replay(d2).errors).toEqual([]);
+    expect(attribute(two.text, [d2, await one.doc()]).filter((o) => o?.rec === 1).length).toBe(10);
+  });
+});
+
 describe("copies between files", () => {
   it("credits a copy made outside the editor to the file where it was typed", async () => {
     const clips = new MemoryClips();

@@ -15,6 +15,7 @@ export interface ClipEntry {
   nonce: string;
   doc: string; // the source document's key (Recorder.docKey)
   ranges: number[]; // copied character ids in document order, as [start, length, ...]
+  parts?: number[]; // for a copy of several ranges: how many of the ids each has
   t: number; // epoch ms
   // In a .arewehuman project: the project and workspace, and the source
   // recording's reference (see recordingRef), so that a paste into another
